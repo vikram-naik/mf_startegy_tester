@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "MF_Name": "Aditya Birla Sun Life Mutual Fund",
+      "Scheme_Name": "Aditya Birla Sun Life Multi-Cap Fund",
+      "Scheme_Objective": "Long-term capital growth through a diversified portfolio.",
+      "SchemeType_Desc": "Open Ended",
+      "SchemeCat_Desc": "Equity Scheme - Multi Cap Fund",
+      "Launch_Date": "2021-04-19T00:00:00+05:30",
+      "Scheme_load": "",
+      "Scheme_min_amt": "500",
+      "AMC_Website": "https://mutualfund.adityabirlacapital.com/",
+      "scheme_Id": 12233,
+      "MF_Id": 3
+    }
+  ]
+}
