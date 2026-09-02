@@ -1,4 +1,4 @@
-# AdvisorKhoj secondary distribution acquisition
+# AdvisorKhoj tertiary distribution acquisition
 
 ## Scope and trust boundary
 
@@ -146,8 +146,10 @@ rows:
 The mapping review classified 2,243 nonempty captures as mapped, 27 as ambiguous, and 396 as
 unresolved. Another 1,776 catalog entries returned an empty history and remain explicitly
 unresolved. Mapped captures represent 761,687 source rows and 2,243 distinct AMFI scheme codes.
-Canonical events published at initial acquisition: zero. This is the pre-fallback baseline; the
-operator publication batch described above has not yet been run against the local database.
+Canonical events published at initial acquisition: zero. This is the dated pre-fallback baseline.
+The operator publication batch subsequently ran and was accepted; its authoritative report is
+`data/advisorkhoj-reports/publication-20260824T123229Z.json`, and current combined counts are in
+`docs/CURRENT_STATUS.md`.
 
 Raw artifact identifiers:
 
@@ -169,8 +171,9 @@ explicit identity-review backlog, not silently discarded data.
 - The source catalog is a current public inventory, not a survivorship-free historical universe.
 - Mapping uses current valid AMFI NAV revisions; immutable source evidence is retained, but a formal
   AMFI NAV snapshot identifier is still required before use in a reproducible backtest.
-- Tertiary amounts must not be used until the fallback publication report and post-run coverage and
-  data-quality reports have been reviewed.
+- Tertiary amounts may be used only through the audited fallback publication links after the
+  AMFI/CAMS/KFintech precedence checks; raw AdvisorKhoj observations are not cash flows by
+  themselves.
 - Future refreshes must be immutable snapshots so upstream additions and corrections remain
   detectable.
 - Backtests should normally use Growth NAV for total-return research. Modeling IDCW requires an

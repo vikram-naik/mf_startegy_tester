@@ -56,7 +56,9 @@ accepted local-research source policy; AMFI, CAMS/KFintech, and AdvisorKhoj are 
 completion sources. Their acquisition runs are complete with retained source limitations, and the
 latest coverage snapshot contains 875,315 canonical events across 3,932 event-present options. The
 AMFI family/detail/launch lifecycle batch has run for all 57 fund catalogs: 10,945 of 10,981
-families have detail-backed launch events and 36 detail gaps remain. Official Nifty price/TRI/NTR
+families have detail-backed launch events. The 36 prior detail gaps were audited as valid official
+rows with explicit null launch dates; the parser and model retain them as unknown-date details, and
+the targeted local recovery completed without inventing launch events. Official Nifty price/TRI/NTR
 and NSE/BSE ETF batches have also run; their acceptance report retains provisional BSE identity,
 partial-roster, empty-period, and invalid-row issues rather than repairing them heuristically. The
 21 option-level identifiers covering 208 source rows that are absent from NAV history now have
@@ -68,7 +70,7 @@ The distribution data-acquisition implementation has an operational precedence r
 current AdvisorKhoj catalog (4,442 histories / 1,066,137 rows) is stored immutably with 2,243
 evidence-backed AMFI mappings and an explicit ambiguous/unresolved backlog. AdvisorKhoj can publish
 only as the tertiary fallback after AMFI and CAMS/KFintech evidence is evaluated. The required
-operator batches and acceptance reports are complete as of 1 September 2026; remaining RTA/Advisor
+operator batches and acceptance reports are complete as of 2 September 2026; remaining RTA/Advisor
 identities, source conflicts, and unverified-empty options are explicit data-quality work rather
 than a reason to infer events or rerun unchanged full acquisitions. Current counts and exact
 reports are in `docs/CURRENT_STATUS.md`.

@@ -206,6 +206,11 @@ amount conflicts instead of silently revising canonical data. Broad AMC-notice c
 supplemental documentary provenance; it is not an IDCW acquisition-completion requirement for this
 local research dataset.
 
+The local acquisition checkpoint described in
+[current project status](docs/CURRENT_STATUS.md) is complete with retained source limitations. The
+long-running commands below are operational/rebuild entrypoints; do not rerun them against the
+current dataset merely to reproduce the accepted reports.
+
 Capture and import all discoverable CAMS/KFintech IDCW histories after the AMFI pass:
 
 ```bash
@@ -217,7 +222,7 @@ scheme-core, plan, and NAV evidence; unresolved rows and amount conflicts remain
 queryable. See [CAMS and KFintech IDCW capture](docs/RTA_DISTRIBUTIONS.md) for resumability,
 operator queries, manual-review commands, and source limitations.
 
-Run the complete, non-publishing AdvisorKhoj secondary-source acquisition with:
+Run the complete AdvisorKhoj tertiary-source acquisition with:
 
 ```bash
 ./scripts/sync_advisorkhoj_distributions.sh
@@ -225,11 +230,12 @@ Run the complete, non-publishing AdvisorKhoj secondary-source acquisition with:
 
 The workflow discovers the current public catalog, captures every listed scheme history, verifies
 amount/NAV/yield arithmetic, and persists only AMFI mappings backed by compatible option qualifiers
-and a conflict-free multi-date NAV fingerprint. It does not publish canonical events. See
-[AdvisorKhoj secondary distribution acquisition](docs/ADVISORKHOJ_DISTRIBUTIONS.md) for the trust
+and a conflict-free multi-date NAV fingerprint. Its audited publication step may publish only as a
+tertiary fallback after AMFI and CAMS/KFintech precedence checks. See
+[AdvisorKhoj tertiary distribution acquisition](docs/ADVISORKHOJ_DISTRIBUTIONS.md) for the trust
 boundary, resumability, live full-catalog result, and remaining identity-review backlog.
 
-Acquire current AMFI family lifecycle facts, then official benchmark series:
+For a fresh dataset, acquire current AMFI family lifecycle facts, then official benchmark series:
 
 ```bash
 ./scripts/sync_scheme_lifecycle.sh

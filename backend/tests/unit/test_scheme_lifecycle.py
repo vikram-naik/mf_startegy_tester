@@ -85,7 +85,7 @@ def _detail_payload(
     fund_id: int = 3,
     scheme_id: int = 12233,
     name: str = "Aditya Birla Sun Life Multi-Cap Fund",
-    launch_date: str = "2021-04-19T00:00:00+05:30",
+    launch_date: str | None = "2021-04-19T00:00:00+05:30",
 ) -> bytes:
     return json.dumps(
         {
@@ -147,6 +147,7 @@ def test_full_lifecycle_sync_is_resumable_and_reports_complete_family_coverage(
     assert report.detail_checkpoints == 1
     assert report.families_with_launch_event == 1
     assert report.latest_catalog_families_without_detail == 0
+    assert report.latest_catalog_families_without_launch_event == 0
 
 
 def test_refresh_retains_conflicting_launch_dates_and_undated_name_change_as_issues(
@@ -175,6 +176,49 @@ def test_refresh_retains_conflicting_launch_dates_and_undated_name_change_as_iss
     assert session.scalar(select(func.count()).select_from(AmfiSchemeDetailRecord)) == 2
     assert session.scalar(select(func.count()).select_from(SchemeLifecycleEventRecord)) == 2
     assert report.families_with_conflicting_launch_dates == 1
+
+
+def test_full_mode_advances_current_checkpoint_name_without_inventing_rename(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    changed_name = "Aditya Birla Sun Life Multicap Fund"
+    downloader = _QueuedDownloader()
+    downloader.add(
+        "populate-scheme",
+        _list_payload(),
+        _list_payload(name=changed_name),
+        _list_payload(name=changed_name),
+    )
+    downloader.add("scheme-details", _detail_payload())
+    service = _service(tmp_path, session, downloader)
+    service.sync(mode="full")
+
+    changed = service.sync(mode="full")
+    repeated = service.sync(mode="full")
+
+    assert changed.issue_counts == {"name_changed_without_effective_date": 1}
+    assert repeated.issue_counts == {}
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(SchemeLifecycleIssueRecord)
+            .where(SchemeLifecycleIssueRecord.issue_code == "name_changed_without_effective_date")
+        )
+        == 1
+    )
+    checkpoint = session.get(SchemeLifecycleCheckpointRecord, ("3", "12233"))
+    assert checkpoint is not None and checkpoint.source_scheme_name == changed_name
+    assert session.scalar(select(func.count()).select_from(AmfiSchemeDetailRecord)) == 1
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(SchemeLifecycleEventRecord)
+            .where(SchemeLifecycleEventRecord.event_type == "rename")
+        )
+        == 0
+    )
+    assert len(downloader.requested_urls) == 4
 
 
 def test_identity_mismatch_is_rejected_without_corrupting_checkpoint(tmp_path: Path) -> None:
@@ -238,6 +282,29 @@ def test_detail_transport_failure_is_audited_and_does_not_abort_other_funds(
     assert "SourceDownloadError" in (failed_batch.error_details or "")
 
 
+def test_null_launch_date_retains_detail_without_inventing_launch_event(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    downloader = _QueuedDownloader()
+    downloader.add("populate-scheme", _list_payload())
+    downloader.add("scheme-details", _detail_payload(launch_date=None))
+    service = _service(tmp_path, session, downloader)
+
+    result = service.sync(mode="full")
+    report = service.coverage_report()
+
+    assert result.status == "completed_with_issues"
+    assert result.families_completed == 1
+    assert result.families_failed == 0
+    assert result.detail_rows_inserted == 1
+    assert result.issue_counts == {"missing_launch_date": 1}
+    detail = session.scalar(select(AmfiSchemeDetailRecord))
+    assert detail is not None and detail.launch_date is None
+    assert session.scalar(select(func.count()).select_from(SchemeLifecycleEventRecord)) == 0
+    assert session.scalar(select(func.count()).select_from(SchemeLifecycleCheckpointRecord)) == 1
+    assert report.latest_catalog_families_without_detail == 0
+    assert report.latest_catalog_families_without_launch_event == 1
+
+
 def test_scheme_details_parser_rejects_timezone_naive_launch_date() -> None:
     with pytest.raises(SourceParseError, match="timezone offset"):
         AmfiSchemeDetailsParser().parse_records(_detail_payload(launch_date="2021-04-19T00:00:00"))
@@ -252,3 +319,11 @@ def test_scheme_details_parser_rejects_wrong_timezone_and_structural_drift() -> 
     document["data"][0]["unexpected"] = "field"
     with pytest.raises(SourceParseError, match="unexpected scheme-details structure"):
         AmfiSchemeDetailsParser().parse_records(json.dumps(document).encode())
+
+
+def test_scheme_details_parser_accepts_null_but_rejects_blank_launch_date() -> None:
+    records = AmfiSchemeDetailsParser().parse_records(_detail_payload(launch_date=None))
+
+    assert records[0].launch_date is None
+    with pytest.raises(SourceParseError, match="invalid launch date"):
+        AmfiSchemeDetailsParser().parse_records(_detail_payload(launch_date=""))

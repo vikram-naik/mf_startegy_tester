@@ -1,8 +1,9 @@
 # Current project status
 
-**Authoritative conversation-reset checkpoint:** 2026-09-01 (`Asia/Kolkata`)
+**Authoritative conversation-reset checkpoint:** 2026-09-02 (`Asia/Kolkata`)
 **Branch:** `main`
-**Database migration:** `20260831_0027` (head)
+**Repository migration head:** `20260902_0028`
+**Local dataset migration applied:** `20260902_0028`
 
 Read `AGENTS.md` before changing code. This file supersedes older numeric status and next-step
 statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronological audit log.
@@ -21,8 +22,8 @@ statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronolog
   a resumable script for the user to run in a separate console. It must retain timestamped logs,
   progress/checkpoints, and a final status/report for later inspection. The agent may run bounded
   tests and read-only diagnostics only. See `AGENTS.md` section 39.
-- The working tree is intentionally dirty with more than 100 modified/untracked paths, and `data/`
-  is about 40 GB and ignored by Git. Preserve all existing work; do not reset, clean, or delete it.
+- Phase 2 was committed as baseline `4fc7302`. The ignored `data/` directory is about 40 GB and
+  remains valuable local research data; do not reset, clean, or delete it.
 
 ## Completion decision
 
@@ -42,11 +43,17 @@ There are no ingestion batches currently marked `running`.
 
 | Measure | Current value |
 | --- | ---: |
-| Scheme options | 33,251 |
-| Valid current NAV revisions | 33,646,811 |
-| Error/quarantined current NAV revisions | 342,756 |
-| Valid NAV date range | 2006-04-01 through 2026-08-27 |
-| Alembic head | `20260831_0027` |
+| Scheme options | 33,277 |
+| Valid current NAV revisions | 33,690,415 |
+| Error/quarantined current NAV revisions | 343,296 |
+| Valid NAV date range | 2006-04-01 through 2026-09-01 |
+| Locally applied Alembic revision | `20260902_0028` |
+
+Incremental NAV run `776d0e37-698c-4c87-b766-c7188d137c10` completed all 57 fund houses on
+2 September through the requested cutoff of 2 September. It received 55,559 rows, inserted 8,204,
+classified 47,355 unchanged, created no financial revisions, and quarantined 691 non-positive
+rows. All 57 fund checkpoints are complete through 2 September; the newest valid source NAV is
+dated 1 September.
 
 ### Canonical IDCW data
 
@@ -151,15 +158,37 @@ AMFI, official-notice, CAMS, or KFintech evidence conflicts.
 
 ### Scheme lifecycle
 
-The full run `9c86a616-669c-40c1-9177-2b2845d4862b` completed with issues:
+The original full run `9c86a616-669c-40c1-9177-2b2845d4862b` completed with issues:
 
 - 57/57 fund scheme-list snapshots completed;
 - 10,945/10,981 family detail rows and launch events acquired;
-- 36 scheme-detail requests failed and remain explicit gaps;
+- 36 scheme-detail responses were rejected by the prior parser;
 - no conflicting launch dates were detected.
 
-This captures launch evidence only. Merger, closure, predecessor identity, and survivorship-free
-historical-universe evidence remain incomplete.
+A checksum-backed audit of all 36 retained official artifacts found the same narrow condition: the
+response identity and structure are valid, but `Launch_Date` is JSON `null`. Migration
+`20260902_0028` and parser `amfi-2026.09.1` retain those details as unknown-date checkpoints,
+record `missing_launch_date`, and publish no launch event.
+
+Targeted recovery run `6ac738f7-5a73-43ce-b15c-fed6b5f4489e` completed successfully at the process
+level (`exit_status=0`) and met every expected postcondition:
+
+- 36/36 detail rows inserted; zero failed or rejected;
+- 10,981/10,981 latest catalog families now have detail checkpoints;
+- 10,945 families have explicit launch events and 36 have explicit unknown launch evidence;
+- no conflicting launch dates and no new inferred lifecycle events;
+- 76 official current catalog names changed without an effective date.
+
+The 76 names remain current attributes only. Follow-up alignment run
+`9eeb4e1f-bf94-4c1e-a1f7-11a7acc8f29d` skipped all 4,004 selected details, completed with an empty
+issue set, and appended no duplicate name-change issues. A direct database reconciliation found
+zero checkpoint names differing from the latest immutable list snapshots. No lifecycle recovery
+operator action remains.
+
+No predecessor, merger, maturity, or closure mapping is justified by these artifacts. Several
+family names look legacy or provisional, but name text plus an unknown launch date is not stable
+continuity evidence. Merger, closure, predecessor identity, and survivorship-free historical-
+universe evidence therefore remain incomplete.
 
 ### Benchmarks
 
@@ -190,7 +219,8 @@ snapshot and Phase 3 accounting/backtesting—not another blind acquisition pass
 2. Retain the audited 67 blocked IDCW options unless new official evidence resolves their
    percentage, Bonus/Dividend, or non-positive semantics; use
    `mfst distribution-blocker-report` after later coverage snapshots to detect changes.
-3. Investigate the 36 lifecycle detail gaps and build explicit merger/closure/predecessor evidence.
+3. Pursue separate official merger/closure/predecessor artifacts without name-based mapping; the
+   null-launch recovery and checkpoint-name alignment are complete.
 4. Reduce benchmark identity uncertainty, especially provisional historical BSE observations,
    without applying current roster identity retrospectively.
 5. Define an immutable dataset-snapshot manifest tying NAV, IDCW, lifecycle, benchmark, parser, and
@@ -199,10 +229,10 @@ snapshot and Phase 3 accounting/backtesting—not another blind acquisition pass
    NAV and preventing IDCW or expense double counting.
 
 The identity backlog is now ranked and fully explained by the retained evidence; it has no safe
-local-only mapping candidate. The next actionable task is item 3: inspect the 36 lifecycle detail
-gaps and use any official predecessor/merger evidence to improve both lifecycle integrity and later
-identity review. Revisit item 1 only when a stable identifier or separate official continuity
-artifact is available.
+local-only mapping candidate. No lifecycle operator action remains. The next engineering task is
+explicit official predecessor/merger evidence or, if none is available for a selected high-value
+identity, item 5's immutable dataset-snapshot manifest. Revisit item 1 only when a stable identifier
+or separate official continuity artifact is available.
 
 ## Application startup
 
@@ -230,16 +260,18 @@ Open `http://127.0.0.1:5173/?view=data`.
 - Full KFintech breadth capture log: `data/rta-reports/kfintech-capture-20260831T143846Z.jsonl`
 - CAMS capture log: `data/rta-reports/cams-capture-20260827T165432Z.jsonl`
 - AdvisorKhoj publication: `data/advisorkhoj-reports/publication-20260824T123229Z.json`
-- Lifecycle coverage: `data/lifecycle-reports/coverage-20260824T125955Z.json`
+- Lifecycle recovery status: `data/lifecycle-reports/sync-20260902T050429Z.status`
+- Lifecycle recovery coverage: `data/lifecycle-reports/coverage-20260902T050429Z.json`
+- Lifecycle alignment status: `data/lifecycle-reports/sync-20260902T052834Z.status`
+- Lifecycle alignment coverage: `data/lifecycle-reports/coverage-20260902T052834Z.json`
 - Benchmark coverage: `data/benchmark-reports/coverage-20260827T142937Z.json`
 
 ## Verification state
 
 The targeted KFintech scheme-filter change passed 16 focused capture/parser tests, Ruff, and shell
-syntax validation. Migration `20260831_0027` is applied, the latest targeted job exited zero, the
-latest normalization and coverage runs completed, and no ingestion batch is running. Do not infer
-that the entire dirty working tree was revalidated by those focused checks; rerun proportionate
-tests before declaring later implementation work complete.
+syntax validation. At that checkpoint migration `20260831_0027` was applied, the targeted job
+exited zero, and the normalization and coverage runs completed. That migration statement is
+historical; the current applied head is `20260902_0028` as reported above.
 
 The subsequent blocked-IDCW audit added the read-only `distribution-blocker-report` command. Its
 live result reconciled all 67 options and 937 rows to the latest coverage snapshot. The identity
@@ -248,10 +280,23 @@ latest non-mapped CAMS, KFintech, and AdvisorKhoj review. All 199 backend unit t
 formatting/lint and strict mypy passed for the changed Python files. Neither report wrote a
 coverage run, source observation, mapping review, or canonical event.
 
+The 2 September lifecycle audit read all 36 checksum-verified failed detail artifacts and confirmed
+that each failure was solely an explicit null `Launch_Date`. The nullable-date implementation,
+checkpoint-name idempotency fix, and wrapper hardening passed 208 unit tests plus four
+source-ingestion integration tests, Ruff formatting/lint, strict mypy, shell syntax validation, and
+migration `0027 -> 0028 -> 0027` on an empty SQLite database. The subsequent live recovery applied
+`0028`, exited zero, and met all detail/launch coverage postconditions. No ingestion batch remains
+running. The final alignment run exited zero, appended no issue, and left zero mismatches between
+current checkpoint names and the latest immutable list snapshots.
+
+The 2 September incremental NAV run independently completed all 57 fund houses through its
+requested cutoff, and maintained statistics report 1 September as the newest valid NAV date. The
+live database values in this file were rechecked after that run rather than copied from the older
+handoff narrative.
+
 ## Suggested first message in a new conversation
 
-> Read `AGENTS.md` and `docs/CURRENT_STATUS.md` completely. Treat the dirty working tree and all
-> local data as existing user work. Accepted-source data acquisition is complete with documented
-> limitations; do not rerun long acquisition jobs. The retained RTA/AdvisorKhoj identity backlog is
-> ranked and contains no safe local-only mapping. Continue with the 36 lifecycle detail gaps and
-> official predecessor/merger evidence before defining the immutable dataset snapshot.
+> Read `AGENTS.md` and `docs/CURRENT_STATUS.md` completely. Preserve all ignored local research data.
+> Accepted-source data acquisition is complete with documented limitations; do not rerun broad
+> acquisition jobs. Lifecycle null-launch recovery and checkpoint alignment are complete. Continue
+> with explicit official predecessor/merger evidence or the immutable dataset snapshot.

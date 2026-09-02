@@ -1,6 +1,6 @@
 # Project handoff
 
-**Snapshot date:** 2026-09-01 (`Asia/Kolkata`)
+**Snapshot date:** 2026-09-02 (`Asia/Kolkata`)
 
 **Authoritative current checkpoint:** [`docs/CURRENT_STATUS.md`](CURRENT_STATUS.md). Read that file
 first after clearing the conversation. The numeric status, pending-batch statements, and next-step
@@ -9,10 +9,9 @@ plan.
 
 **Branch:** `main`
 
-**Working-tree state:** intentionally dirty. There are more than 100 modified/untracked paths
-containing the Phase 2 ingestion, distribution, research-UI, migration, test, and documentation
-work described below and subsequent acquisition work. Treat all existing changes as user work:
-inspect before editing and do not reset, clean, or discard them.
+**Version-control state:** Phase 2 was committed as baseline `4fc7302`. Post-baseline lifecycle and
+documentation changes may remain in the working tree; inspect before editing and do not reset,
+clean, or discard them. The ignored local `data/` directory remains valuable research state.
 
 ## Historical handoff narrative
 

@@ -40,7 +40,7 @@ from mf_strategy_tester.services.source_ingestion import Downloader
 
 logger = logging.getLogger(__name__)
 
-LIFECYCLE_NORMALIZATION_VERSION = "amfi-scheme-lifecycle-2026.08.1"
+LIFECYCLE_NORMALIZATION_VERSION = "amfi-scheme-lifecycle-2026.09.1"
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ class SchemeLifecycleCoverageReport:
     families_with_launch_event: int
     families_with_conflicting_launch_dates: int
     latest_catalog_families_without_detail: int
+    latest_catalog_families_without_launch_event: int
     lifecycle_event_counts: dict[str, int]
     issue_counts: dict[str, int]
     latest_sync_run: dict[str, object] | None
@@ -156,17 +157,20 @@ class SchemeLifecycleSyncService:
                         checkpoint is not None
                         and checkpoint.source_scheme_name != family.scheme_name
                     ):
-                        self._record_issue(
-                            run,
-                            fund.mutual_fund_id,
-                            family.scheme_id,
-                            list_batch.id,
-                            "name_changed_without_effective_date",
-                            "AMFI catalog name changed without an explicit effective date: "
-                            f"prior={checkpoint.source_scheme_name!r}, "
-                            f"current={family.scheme_name!r}",
-                            issue_counts,
-                        )
+                        if previous_memberships.get(family.scheme_id) != family.scheme_name:
+                            self._record_issue(
+                                run,
+                                fund.mutual_fund_id,
+                                family.scheme_id,
+                                list_batch.id,
+                                "name_changed_without_effective_date",
+                                "AMFI catalog name changed without an explicit effective date: "
+                                f"prior={checkpoint.source_scheme_name!r}, "
+                                f"current={family.scheme_name!r}",
+                                issue_counts,
+                            )
+                        checkpoint.source_scheme_name = family.scheme_name
+                        checkpoint.updated_at = utc_now()
                     if mode == "full" and checkpoint is not None:
                         run.families_skipped += 1
                         self._update_run(run)
@@ -215,7 +219,20 @@ class SchemeLifecycleSyncService:
                     detail, inserted = self._persist_detail(detail_rows[0], detail_batch)
                     run.detail_rows_inserted += int(inserted)
                     run.detail_rows_unchanged += int(not inserted)
-                    self._persist_launch_event(run, detail, detail_batch, issue_counts)
+                    if detail.launch_date is None:
+                        self._record_issue(
+                            run,
+                            detail.mutual_fund_id,
+                            detail.source_scheme_id,
+                            detail_batch.id,
+                            "missing_launch_date",
+                            "AMFI scheme-details returned a null launch date; detail metadata is "
+                            "retained, but no launch event or historical eligibility date is "
+                            "inferred",
+                            issue_counts,
+                        )
+                    else:
+                        self._persist_launch_event(run, detail, detail_batch, issue_counts)
                     self._upsert_checkpoint(run, family, detail, detail_batch)
                     run.families_completed += 1
                     self._update_run(run)
@@ -303,6 +320,7 @@ class SchemeLifecycleSyncService:
                 SchemeLifecycleEventRecord.source_scheme_id,
             )
         ).all()
+        launch_families = {(row[0], row[1]) for row in launch_date_counts}
         event_counts = {
             event_type: int(count)
             for event_type, count in self._session.execute(
@@ -334,6 +352,7 @@ class SchemeLifecycleSyncService:
             families_with_launch_event=len(launch_date_counts),
             families_with_conflicting_launch_dates=sum(row[2] > 1 for row in launch_date_counts),
             latest_catalog_families_without_detail=len(latest_memberships - checkpoints),
+            latest_catalog_families_without_launch_event=len(latest_memberships - launch_families),
             lifecycle_event_counts=event_counts,
             issue_counts=issue_counts,
             latest_sync_run=(
@@ -475,7 +494,7 @@ class SchemeLifecycleSyncService:
             source.scheme_name,
             source.scheme_type,
             source.scheme_category,
-            source.launch_date.date().isoformat(),
+            source.launch_date.date().isoformat() if source.launch_date is not None else None,
         )
         record = self._session.scalar(
             select(AmfiSchemeDetailRecord).where(
@@ -491,7 +510,7 @@ class SchemeLifecycleSyncService:
                 scheme_name=source.scheme_name,
                 scheme_type=source.scheme_type,
                 scheme_category=source.scheme_category,
-                launch_date=source.launch_date.date(),
+                launch_date=(source.launch_date.date() if source.launch_date is not None else None),
                 content_signature=signature,
                 first_observed_batch_id=batch.id,
             )
@@ -512,12 +531,15 @@ class SchemeLifecycleSyncService:
         batch: IngestionBatchRecord,
         issue_counts: dict[str, int],
     ) -> None:
+        launch_date = detail.launch_date
+        if launch_date is None:
+            raise ValueError("cannot publish a launch event without an official launch date")
         signature = _signature(
             "event",
             detail.mutual_fund_id,
             detail.source_scheme_id,
             "launch",
-            detail.launch_date.isoformat(),
+            launch_date.isoformat(),
             "amfi_scheme_details",
         )
         event = self._session.scalar(
@@ -535,7 +557,7 @@ class SchemeLifecycleSyncService:
                     )
                 )
             )
-            if prior_dates and detail.launch_date not in prior_dates:
+            if prior_dates and launch_date not in prior_dates:
                 self._record_issue(
                     run,
                     detail.mutual_fund_id,
@@ -544,14 +566,14 @@ class SchemeLifecycleSyncService:
                     "launch_date_conflict",
                     "AMFI scheme-details launch date conflicts with prior official observations: "
                     f"prior={sorted(item.isoformat() for item in prior_dates)}, "
-                    f"current={detail.launch_date.isoformat()}",
+                    f"current={launch_date.isoformat()}",
                     issue_counts,
                 )
             event = SchemeLifecycleEventRecord(
                 mutual_fund_id=detail.mutual_fund_id,
                 source_scheme_id=detail.source_scheme_id,
                 event_type="launch",
-                effective_date=detail.launch_date,
+                effective_date=launch_date,
                 new_name=detail.scheme_name,
                 source_kind="amfi_scheme_details",
                 content_signature=signature,
@@ -697,6 +719,6 @@ class SchemeLifecycleSyncService:
             raise RuntimeError("scheme lifecycle detail row counters do not reconcile")
 
 
-def _signature(*values: str) -> str:
+def _signature(*values: str | None) -> str:
     encoded = json.dumps(values, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

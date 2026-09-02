@@ -13,7 +13,7 @@ from mf_strategy_tester.ingestion.errors import (
     SourceTemporarilyUnavailableError,
 )
 
-PARSER_VERSION = "amfi-2026.08.12"
+PARSER_VERSION = "amfi-2026.09.1"
 DISTRIBUTION_PERCENTAGE_THROUGH = date(2009, 4, 6)
 _DISTRIBUTION_COMPOSITE_VALUE = re.compile(
     r"(?P<percentage>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))%\s+"
@@ -151,7 +151,7 @@ class SchemeDetailRecord:
     scheme_name: str
     scheme_type: str
     scheme_category: str
-    launch_date: datetime
+    launch_date: datetime | None
 
 
 @dataclass(frozen=True)
@@ -429,18 +429,23 @@ class AmfiSchemeDetailsParser:
             scheme_id = str(item["scheme_Id"])
             if not mutual_fund_id.isdigit() or not scheme_id.isdigit():
                 raise SourceParseError(f"invalid scheme-details identity at record {index}")
-            try:
-                launch_date = datetime.fromisoformat(str(item["Launch_Date"]))
-            except ValueError as error:
-                raise SourceParseError(f"invalid launch date at record {index}") from error
-            if launch_date.tzinfo is None or launch_date.utcoffset() is None:
-                raise SourceParseError(
-                    f"launch date must include a timezone offset at record {index}"
-                )
-            if launch_date.utcoffset() != timedelta(hours=5, minutes=30):
-                raise SourceParseError(
-                    f"launch date must use the Asia/Kolkata UTC offset at record {index}"
-                )
+            raw_launch_date = item["Launch_Date"]
+            launch_date: datetime | None = None
+            if raw_launch_date is not None:
+                if not isinstance(raw_launch_date, str) or not raw_launch_date.strip():
+                    raise SourceParseError(f"invalid launch date at record {index}")
+                try:
+                    launch_date = datetime.fromisoformat(raw_launch_date)
+                except ValueError as error:
+                    raise SourceParseError(f"invalid launch date at record {index}") from error
+                if launch_date.tzinfo is None or launch_date.utcoffset() is None:
+                    raise SourceParseError(
+                        f"launch date must include a timezone offset at record {index}"
+                    )
+                if launch_date.utcoffset() != timedelta(hours=5, minutes=30):
+                    raise SourceParseError(
+                        f"launch date must use the Asia/Kolkata UTC offset at record {index}"
+                    )
             records.append(
                 SchemeDetailRecord(
                     mutual_fund_id=mutual_fund_id,

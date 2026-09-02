@@ -2,6 +2,12 @@
 
 **Review date:** 2026-08-17 (`Asia/Kolkata`)
 
+**Historical checkpoint:** Counts below describe the 17 August source snapshot and initial
+normalization. Later parser/source versions retain 208 source-row versions across the same 21
+source-only identifiers. Use `docs/CURRENT_STATUS.md` and the latest
+`distribution-identity-backlog-report` for current counts; the evidence rules and prohibition on
+name-only mapping below remain current.
+
 ## Scope and conclusion
 
 The complete AMFI distribution snapshot contains 103 rows across 21 `SD_ID` values that are not

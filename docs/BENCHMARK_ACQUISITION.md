@@ -178,6 +178,8 @@ backend/.venv/bin/mfst benchmark-report
 - Index price return and total return are not interchangeable. Backtests must select the series
   economically appropriate to the strategy and disclose the choice.
 
-The data-acquisition phase is complete only after both long runs have acceptance reports with the
-expected date ranges, failed-request counts have been investigated, and provisional/partial BSE
-coverage remains visible in dataset metadata.
+This acceptance condition has been met. Both long runs completed with explicit retained issues;
+the authoritative acceptance artifact is
+`data/benchmark-reports/coverage-20260827T142937Z.json`. Provisional/partial BSE identity remains a
+visible research limitation, not a reason to repeat unchanged acquisition. Current counts are in
+`docs/CURRENT_STATUS.md`.

@@ -1438,7 +1438,7 @@ class AmfiSchemeDetailRecord(Base):
     scheme_name: Mapped[str] = mapped_column(Text, nullable=False)
     scheme_type: Mapped[str] = mapped_column(Text, nullable=False)
     scheme_category: Mapped[str] = mapped_column(Text, nullable=False)
-    launch_date: Mapped[date] = mapped_column(Date, nullable=False)
+    launch_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     content_signature: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     first_observed_batch_id: Mapped[str] = mapped_column(
         ForeignKey("ingestion_batches.id", ondelete="RESTRICT"), nullable=False
@@ -1535,7 +1535,7 @@ class SchemeLifecycleIssueRecord(Base):
         CheckConstraint(
             "issue_code IN ('scheme_list_failure', 'scheme_detail_failure', "
             "'identity_mismatch', 'launch_date_conflict', 'catalog_member_removed', "
-            "'name_changed_without_effective_date')",
+            "'name_changed_without_effective_date', 'missing_launch_date')",
             name="ck_scheme_lifecycle_issue_code",
         ),
         Index("ix_lifecycle_issue_run_code", "sync_run_id", "issue_code"),
