@@ -1,0 +1,7 @@
+Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date
+
+Open Ended Schemes ( Equity Scheme - Multi Cap Fund )
+
+Aditya Birla Sun Life Mutual Fund
+148921;Aditya Birla Sun Life Multi-Cap Fund-Direct Growth;Direct Plan;GROWTH;INF209KB1Y49;;23.12;20-Aug-2026
+148919;Aditya Birla Sun Life Multi-Cap Fund-Regular-IDCW Payout;Regular Plan;IDCW Payout;INF209KB1Y31;;19.06;20-Aug-2026

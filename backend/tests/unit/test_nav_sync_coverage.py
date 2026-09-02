@@ -14,11 +14,13 @@ from mf_strategy_tester.db.models import (
     NavSyncRunRecord,
 )
 from mf_strategy_tester.db.session import create_database_engine
+from mf_strategy_tester.ingestion.amfi import SchemeType, historical_nav_request
 from mf_strategy_tester.ingestion.artifacts import ArtifactStore
+from mf_strategy_tester.ingestion.errors import SourceTemporarilyUnavailableError
 from mf_strategy_tester.ingestion.http import DownloadedSource
 from mf_strategy_tester.repositories.ingestion import IngestionRepository
 from mf_strategy_tester.services.nav_sync import NavSyncService
-from mf_strategy_tester.services.source_ingestion import SourceIngestionService
+from mf_strategy_tester.services.source_ingestion import IngestionResult, SourceIngestionService
 
 
 class InterruptingDownloader:
@@ -40,6 +42,51 @@ class InterruptingDownloader:
             status_code=200,
             final_url=url,
         )
+
+
+class TransientThenSuccessfulIngestion:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def ingest(self, _request: object) -> IngestionResult:
+        self.calls += 1
+        if self.calls < 3:
+            raise SourceTemporarilyUnavailableError("temporary AMFI response")
+        return IngestionResult(
+            batch_id="batch-id",
+            status="completed",
+            source_type="historical_nav",
+            sha256="0" * 64,
+            artifact_reused=False,
+            rows_received=1,
+            rows_accepted=1,
+            rows_rejected=0,
+        )
+
+
+def test_nav_sync_retries_only_typed_transient_amfi_responses(tmp_path: Path) -> None:
+    delays: list[float] = []
+    ingestion = TransientThenSuccessfulIngestion()
+    service = NavSyncService(
+        cast(Session, object()),
+        cast(SourceIngestionService, ingestion),
+        cast(IngestionRepository, object()),
+        ArtifactStore(tmp_path / "raw"),
+        sleep=delays.append,
+    )
+
+    result = service._ingest_nav_request(
+        historical_nav_request(
+            mutual_fund_id="3",
+            from_date=date(2026, 8, 1),
+            to_date=date(2026, 8, 27),
+            scheme_type=SchemeType.ALL,
+        )
+    )
+
+    assert result.batch_id == "batch-id"
+    assert ingestion.calls == 3
+    assert delays == [2.0, 5.0]
 
 
 def test_coverage_intervals_expose_gaps_and_merge_adjacent_windows(tmp_path: Path) -> None:
@@ -125,5 +172,12 @@ def test_keyboard_interrupt_marks_sync_failed_and_preserves_resume_state(tmp_pat
     assert run.status == "failed"
     assert run.completed_at is not None
     assert run.error_details == "KeyboardInterrupt: interrupted by user"
+    batches = list(
+        session.scalars(
+            select(IngestionBatchRecord).order_by(IngestionBatchRecord.started_at)
+        ).all()
+    )
+    assert batches[-1].status == "failed"
+    assert batches[-1].error_details == "KeyboardInterrupt: interrupted by user"
     session.close()
     engine.dispose()

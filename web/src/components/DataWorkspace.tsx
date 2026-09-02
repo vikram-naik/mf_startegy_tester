@@ -2,16 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   getDataCoverage,
+  getSchemePerformance,
   listFundHouses,
   listIngestionBatches,
   listSchemeCategories,
+  listSchemeDistributions,
   listSchemes,
   type DataCoverage,
+  type DistributionEventBrowser,
   type FundHouse,
   type IngestionBatch,
   type SchemeBrowser,
+  type SchemeBrowserItem,
   type SchemeCategory,
+  type SchemePerformance,
 } from "../api/client";
+import { latestRollingReturn, SUMMARY_CAGR_WINDOWS } from "../model/performance";
+import { distributionCoverageMessage } from "../model/distributionCoverage";
 
 const PAGE_SIZE = 50;
 
@@ -23,6 +30,15 @@ function formatBytes(value: number | null): string {
 
 function errorMessage(reason: unknown, fallback: string): string {
   return reason instanceof Error ? reason.message : fallback;
+}
+
+function formatPercent(value: string | null): string {
+  if (value === null) return "—";
+  return `${Number(value).toFixed(2)}%`;
+}
+
+function formatNav(value: string): string {
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
 export function DataWorkspace() {
@@ -37,6 +53,11 @@ export function DataWorkspace() {
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [schemes, setSchemes] = useState<SchemeBrowser | null>(null);
+  const [selectedScheme, setSelectedScheme] = useState<SchemeBrowserItem | null>(null);
+  const [performance, setPerformance] = useState<SchemePerformance | null>(null);
+  const [distributions, setDistributions] = useState<DistributionEventBrowser | null>(null);
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [isLoadingSchemes, setIsLoadingSchemes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [browserError, setBrowserError] = useState<string | null>(null);
@@ -112,7 +133,40 @@ export function DataWorkspace() {
     };
   }, [selectedFundHouseId, category, planType, optionType, search, offset]);
 
+  useEffect(() => {
+    if (selectedScheme === null) {
+      setPerformance(null);
+      setDistributions(null);
+      setDetailError(null);
+      return;
+    }
+    let current = true;
+    setIsLoadingDetails(true);
+    setDetailError(null);
+    setPerformance(null);
+    setDistributions(null);
+    Promise.all([
+      getSchemePerformance(selectedScheme.amfi_scheme_code),
+      listSchemeDistributions(selectedScheme.amfi_scheme_code),
+    ])
+      .then(([loadedPerformance, loadedDistributions]) => {
+        if (!current) return;
+        setPerformance(loadedPerformance);
+        setDistributions(loadedDistributions);
+      })
+      .catch((reason: unknown) => {
+        if (current) setDetailError(errorMessage(reason, "Unable to load scheme analytics."));
+      })
+      .finally(() => {
+        if (current) setIsLoadingDetails(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [selectedScheme]);
+
   const resetPage = () => setOffset(0);
+  const coverageMessage = distributionCoverageMessage(distributions?.coverage ?? null);
 
   return (
     <section className="data-workspace">
@@ -166,6 +220,7 @@ export function DataWorkspace() {
               value={selectedFundHouseId}
               onChange={(event) => {
                 setSelectedFundHouseId(event.target.value);
+                setSelectedScheme(null);
                 setCategory("");
                 resetPage();
               }}
@@ -251,8 +306,8 @@ export function DataWorkspace() {
               </thead>
               <tbody>
                 {schemes?.items.map((scheme) => (
-                  <tr key={scheme.amfi_scheme_code}>
-                    <td><strong>{scheme.scheme_name}</strong></td>
+                  <tr key={scheme.amfi_scheme_code} className={selectedScheme?.amfi_scheme_code === scheme.amfi_scheme_code ? "is-selected" : ""}>
+                    <td><button className="scheme-link" type="button" onClick={() => setSelectedScheme(scheme)}>{scheme.scheme_name}</button></td>
                     <td>
                       <code>{scheme.amfi_scheme_code}</code>
                       <small>{scheme.isin_payout_or_growth ?? scheme.isin_reinvestment ?? "No ISIN published"}</small>
@@ -278,6 +333,119 @@ export function DataWorkspace() {
               <button disabled={offset + PAGE_SIZE >= schemes.total || isLoadingSchemes} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</button>
             </div>
           </div>
+        )}
+
+        {selectedScheme && (
+          <section className="scheme-detail" aria-live="polite">
+            <div className="scheme-detail-heading">
+              <div>
+                <span className="eyebrow">NAV analytics and canonical distributions</span>
+                <h3>{selectedScheme.scheme_name}</h3>
+                <code>{selectedScheme.amfi_scheme_code}</code>
+              </div>
+              <button type="button" onClick={() => setSelectedScheme(null)}>Close</button>
+            </div>
+
+            <div className="calculation-note">
+              NAV-only returns · IDCW payouts excluded · Actual/365 annualization · no NAV
+              forward-fill. For IDCW options, these figures are NAV change—not total return.
+            </div>
+
+            {detailError && <div className="browser-message">{detailError}</div>}
+            {isLoadingDetails ? (
+              <div className="batch-empty"><strong>Calculating scheme analytics…</strong></div>
+            ) : performance ? (
+              <>
+                <div className="stat-grid performance-grid">
+                  <div><span>Since-inception NAV CAGR</span><strong>{formatPercent(performance.since_inception.annualized_return_pct)}</strong><small>{performance.since_inception.start_date} to {performance.since_inception.end_date}</small></div>
+                  {SUMMARY_CAGR_WINDOWS.map((windowYears) => {
+                    const trailingReturn = latestRollingReturn(
+                      performance.rolling_returns,
+                      windowYears,
+                    );
+                    return (
+                      <div key={windowYears}>
+                        <span>{windowYears}-year NAV CAGR</span>
+                        <strong>{formatPercent(trailingReturn?.annualized_return_pct ?? null)}</strong>
+                        <small>
+                          {trailingReturn
+                            ? `${trailingReturn.start_date} to ${trailingReturn.end_date}`
+                            : "Insufficient valid NAV history"}
+                        </small>
+                      </div>
+                    );
+                  })}
+                  <div><span>Since-inception NAV return</span><strong>{formatPercent(performance.since_inception.total_return_pct)}</strong><small>{formatNav(performance.since_inception.start_nav)} → {formatNav(performance.since_inception.end_nav)}</small></div>
+                  <div><span>Maximum NAV drawdown</span><strong>{formatPercent(performance.drawdown.maximum_drawdown_pct)}</strong><small>{performance.drawdown.peak_date} to {performance.drawdown.trough_date}</small></div>
+                  <div><span>Valid observations</span><strong>{performance.observation_count.toLocaleString()}</strong><small>Current stored revisions</small></div>
+                </div>
+
+                <div className="detail-section">
+                  <h4>Rolling annualized NAV returns</h4>
+                  <p>{performance.rolling_start_rule}. Overlapping daily endpoint samples.</p>
+                  <div className="table-scroll">
+                    <table>
+                      <thead><tr><th>Window</th><th>Latest</th><th>Median</th><th>Mean</th><th>Range</th><th>Positive</th><th>Samples</th></tr></thead>
+                      <tbody>
+                        {performance.rolling_returns.map((item) => (
+                          <tr key={item.window_years}>
+                            <td><strong>{item.window_years} year{item.window_years === 1 ? "" : "s"}</strong></td>
+                            <td>{formatPercent(item.latest?.annualized_return_pct ?? null)}<small>{item.latest ? `${item.latest.start_date} to ${item.latest.end_date}` : "Insufficient history"}</small></td>
+                            <td>{formatPercent(item.median_annualized_return_pct)}</td>
+                            <td>{formatPercent(item.mean_annualized_return_pct)}</td>
+                            <td>{formatPercent(item.minimum_annualized_return_pct)} to {formatPercent(item.maximum_annualized_return_pct)}</td>
+                            <td>{formatPercent(item.positive_periods_pct)}</td>
+                            <td>{item.sample_count.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="detail-section">
+                  <h4>Canonical IDCW events</h4>
+                  <p>Official AMFI or AMC record dates and INR amounts per unit. Payment dates and portfolio cash flows are not inferred.</p>
+                  <div className={`coverage-note ${coverageMessage.tone}`}>
+                    <strong>{coverageMessage.label}</strong>
+                    <span>{coverageMessage.detail}</span>
+                  </div>
+                  {distributions?.items.length ? (
+                    <div className="table-scroll">
+                      <table>
+                        <thead><tr><th>Record date</th><th>Current amount/unit</th><th>Revision</th><th>Exact official source</th></tr></thead>
+                        <tbody>
+                          {distributions.items.map((event) => {
+                            const currentRevision = event.revisions.find((item) => item.is_current);
+                            const source = currentRevision?.sources[0];
+                            return (
+                              <tr key={event.event_id}>
+                                <td>{event.record_date}</td>
+                                <td><strong>{currentRevision ? `₹${formatNav(currentRevision.amount_per_unit_inr)}` : "—"}</strong></td>
+                                <td>{currentRevision ? `v${currentRevision.revision_number}` : "—"}<small>{currentRevision?.normalization_version ?? "Missing revision"}</small></td>
+                                <td><code>{source?.source_content_signature.slice(0, 12) ?? "—"}</code><small>{source ? `${source.provider} · ${source.parser_version} · ${source.raw_source_value}` : "Missing provenance"}</small></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="batch-empty">
+                      <strong>No canonical IDCW events for this option</strong>
+                      <p>
+                        No resolved official source rows have been published, or source rows may have
+                        been retained outside the conservative cash-payout normalization gate.
+                      </p>
+                    </div>
+                  )}
+                  {distributions && distributions.total > distributions.items.length && (
+                    <small>Showing the latest {distributions.items.length} of {distributions.total.toLocaleString()} events.</small>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </section>
         )}
       </div>
 

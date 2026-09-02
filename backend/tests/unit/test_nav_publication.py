@@ -115,6 +115,38 @@ def test_metadata_text_change_does_not_create_a_financial_revision(tmp_path: Pat
     session.close()
 
 
+def test_explicit_amfi_qualifiers_classify_metadata_and_publish_idempotently(
+    tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    records = AmfiNavParser().parse_records(
+        (FIXTURES / "nav_current_with_qualifiers.txt").read_bytes()
+    )
+    publisher = NormalizedNavPublisher(session)
+
+    first = publisher.publish(records, batch_id=_batch(session).id)
+    second = publisher.publish(records, batch_id=_batch(session).id)
+
+    metadata = list(
+        session.scalars(
+            select(SchemeMetadataVersionRecord).order_by(
+                SchemeMetadataVersionRecord.amfi_scheme_code
+            )
+        ).all()
+    )
+    assert (first.rows_inserted, second.rows_unchanged) == (2, 2)
+    assert [(item.plan_type, item.option_type) for item in metadata] == [
+        ("regular", "growth"),
+        ("direct", "idcw"),
+    ]
+    assert {item.classification_method for item in metadata} == {
+        "amfi_plan_explicit_option_explicit_v1"
+    }
+    assert metadata[1].scheme_name == "Aditya Birla Sun Life Banking & PSU Debt Fund"
+    assert session.scalar(select(func.count()).select_from(NavRevisionRecord)) == 2
+    session.close()
+
+
 def test_non_numeric_nav_is_rejected_without_losing_source_context(tmp_path: Path) -> None:
     session = _session(tmp_path)
     invalid = InvalidNavSourceRecord(

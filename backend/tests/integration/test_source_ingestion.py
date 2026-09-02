@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -74,4 +75,66 @@ def test_invalid_source_is_retained_and_batch_is_failed(tmp_path: Path) -> None:
     assert batch.artifact_id is not None
     assert "SourceParseError" in (batch.error_details or "")
     assert session.scalar(select(func.count()).select_from(SourceArtifactRecord)) == 1
+    session.close()
+
+
+def test_stale_batch_reconciliation_is_explicit_and_guarded(tmp_path: Path) -> None:
+    service, session = create_service(tmp_path, b"unused")
+    del service
+    repository = IngestionRepository(session)
+    batch = repository.start_batch(
+        provider="amfi",
+        source_type="historical_nav",
+        source_url="https://example.invalid/nav",
+        request_parameters={"mf": "20"},
+        parser_version="test",
+    )
+    batch.started_at = datetime(2026, 8, 16, tzinfo=UTC)
+    session.commit()
+
+    reconciled = repository.reconcile_stale_batch(
+        batch.id,
+        stale_before=datetime(2026, 8, 17, tzinfo=UTC),
+        reason="worker process was verified absent",
+    )
+
+    assert reconciled.status == "failed"
+    assert reconciled.completed_at is not None
+    assert reconciled.error_details == ("StaleBatchReconciled: worker process was verified absent")
+    with pytest.raises(ValueError, match="is not running"):
+        repository.reconcile_stale_batch(
+            batch.id,
+            stale_before=datetime(2026, 8, 17, tzinfo=UTC),
+            reason="second attempt",
+        )
+    session.close()
+
+
+def test_stale_batch_reconciliation_rejects_recent_or_naive_cutoff(tmp_path: Path) -> None:
+    service, session = create_service(tmp_path, b"unused")
+    del service
+    repository = IngestionRepository(session)
+    batch = repository.start_batch(
+        provider="amfi",
+        source_type="historical_nav",
+        source_url="https://example.invalid/nav",
+        request_parameters={},
+        parser_version="test",
+    )
+    batch.started_at = datetime(2026, 8, 17, tzinfo=UTC)
+    session.commit()
+
+    with pytest.raises(ValueError, match="must include a timezone offset"):
+        repository.reconcile_stale_batch(
+            batch.id,
+            stale_before=datetime(2026, 8, 18),
+            reason="worker absent",
+        )
+    with pytest.raises(ValueError, match="is not before the stale cutoff"):
+        repository.reconcile_stale_batch(
+            batch.id,
+            stale_before=datetime(2026, 8, 17, tzinfo=UTC),
+            reason="worker absent",
+        )
+    assert batch.status == "running"
     session.close()

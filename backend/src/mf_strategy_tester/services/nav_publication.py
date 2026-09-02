@@ -314,7 +314,7 @@ class NormalizedNavPublisher:
         for identifier, record in sources.items():
             if identifier in existing_ids:
                 continue
-            plan_type, option_type = _infer_plan_option(record.scheme_name)
+            plan_type, option_type, classification_method = _classify_plan_option(record)
             self._session.add(
                 SchemeMetadataVersionRecord(
                     id=identifier,
@@ -326,7 +326,7 @@ class NormalizedNavPublisher:
                     isin_reinvestment=record.isin_reinvestment,
                     plan_type=plan_type,
                     option_type=option_type,
-                    classification_method="name_heuristic_v1",
+                    classification_method=classification_method,
                     first_observed_batch_id=batch_id,
                 )
             )
@@ -370,7 +370,7 @@ class NormalizedNavPublisher:
 
     @staticmethod
     def _metadata_signature(record: NavParsedRecord) -> str:
-        plan_type, option_type = _infer_plan_option(record.scheme_name)
+        plan_type, option_type, classification_method = _classify_plan_option(record)
         return _hash_values(
             record.scheme_code,
             record.scheme_name,
@@ -380,7 +380,7 @@ class NormalizedNavPublisher:
             record.isin_reinvestment,
             plan_type,
             option_type,
-            "name_heuristic_v1",
+            classification_method,
         )
 
     @staticmethod
@@ -405,6 +405,48 @@ def _infer_plan_option(scheme_name: str) -> tuple[str, str]:
     else:
         option = "unknown"
     return plan, option
+
+
+def _classify_plan_option(record: NavParsedRecord) -> tuple[str, str, str]:
+    inferred_plan, inferred_option = _infer_plan_option(record.scheme_name)
+    plan = _normalize_explicit_plan(record.source_plan) if record.source_plan is not None else None
+    option = (
+        _normalize_explicit_option(record.source_option)
+        if record.source_option is not None
+        else None
+    )
+    methods = (
+        "explicit" if record.source_plan is not None else "name_heuristic",
+        "explicit" if record.source_option is not None else "name_heuristic",
+    )
+    return (
+        plan if plan is not None else inferred_plan,
+        option if option is not None else inferred_option,
+        f"amfi_plan_{methods[0]}_option_{methods[1]}_v1",
+    )
+
+
+def _normalize_explicit_plan(source_plan: str) -> str:
+    normalized = " ".join(source_plan.casefold().replace("-", " ").split())
+    if re.search(r"\bdirect\b", normalized):
+        return "direct"
+    if re.search(r"\bregular\b", normalized):
+        return "regular"
+    return "unknown"
+
+
+def _normalize_explicit_option(source_option: str) -> str:
+    normalized = " ".join(source_option.casefold().replace("-", " ").split())
+    if (
+        re.search(r"\b(idcw|idwc|dcw|dividend)\b", normalized)
+        or "income distribution" in normalized
+    ):
+        return "idcw"
+    if re.search(r"\bgrowth\b", normalized):
+        return "growth"
+    if re.search(r"\bbonus\b", normalized):
+        return "bonus"
+    return "unknown"
 
 
 def _hash_values(*values: object) -> str:

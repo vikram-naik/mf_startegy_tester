@@ -1427,3 +1427,23 @@ When forced to choose between:
 choose correctness, auditability, and evidence.
 
 For this project, a result that cannot be explained and reproduced is not a valid research result.
+
+---
+
+# 39. Long-Running Process Handover
+
+Do not run or continuously monitor long-running acquisition, synchronization, backfill, build, or
+analysis processes through the agent session.
+
+For every long-running process:
+
+1. Provide or reuse a resumable, idempotent script.
+2. Make the script persist timestamped logs, progress/checkpoints, and a final machine-readable
+   status or report in the repository's established data/report directories.
+3. Hand the exact command and working directory to the user to run in a separate console.
+4. State how interruption, resumption, locking, partial success, and failure are represented.
+5. After the user reports completion, inspect the retained logs and reports rather than requiring
+   the console session to remain attached.
+
+The agent may run short validation commands or bounded smoke tests, but must hand over the full
+long-running execution unless the user explicitly requests otherwise.

@@ -117,10 +117,110 @@ const schemeBrowserSchema = z.object({
   offset: z.number().int().nonnegative(),
 });
 
+const navReturnSchema = z.object({
+  start_date: z.string(),
+  end_date: z.string(),
+  start_nav: z.string(),
+  end_nav: z.string(),
+  elapsed_days: z.number().int().nonnegative(),
+  total_return_pct: z.string(),
+  annualized_return_pct: z.string().nullable(),
+});
+
+const rollingReturnSummarySchema = z.object({
+  window_years: z.number().int().positive(),
+  sample_count: z.number().int().nonnegative(),
+  latest: navReturnSchema.nullable(),
+  minimum_annualized_return_pct: z.string().nullable(),
+  median_annualized_return_pct: z.string().nullable(),
+  mean_annualized_return_pct: z.string().nullable(),
+  maximum_annualized_return_pct: z.string().nullable(),
+  positive_periods_pct: z.string().nullable(),
+});
+
+const schemePerformanceSchema = z.object({
+  amfi_scheme_code: z.string(),
+  return_basis: z.literal("nav_only"),
+  distribution_treatment: z.literal("excluded"),
+  day_count_convention: z.literal("actual/365"),
+  rolling_start_rule: z.string(),
+  observation_count: z.number().int().positive(),
+  since_inception: navReturnSchema,
+  rolling_returns: z.array(rollingReturnSummarySchema),
+  drawdown: z.object({
+    maximum_drawdown_pct: z.string(),
+    peak_date: z.string(),
+    trough_date: z.string(),
+  }),
+});
+
+const distributionSourceSchema = z.object({
+  provider: z.string(),
+  source_kind: z.enum([
+    "amfi_distribution_api",
+    "amc_distribution_notice",
+    "rta_distribution_history",
+    "third_party_distribution_history",
+  ]),
+  source_record_id: z.string(),
+  mutual_fund_id: z.string().nullable(),
+  source_scheme_id: z.string().nullable(),
+  source_option_id: z.string(),
+  scheme_name: z.string(),
+  nav_name: z.string(),
+  record_date: z.string(),
+  raw_source_value: z.string(),
+  source_unit: z.string(),
+  source_content_signature: z.string(),
+  ingestion_batch_id: z.string(),
+  source_url: z.string(),
+  retrieved_at: z.string(),
+  parser_version: z.string(),
+  artifact_sha256: z.string().nullable(),
+  identity_evidence_batch_id: z.string().nullable(),
+  identity_evidence_url: z.string().nullable(),
+  identity_artifact_sha256: z.string().nullable(),
+  identity_evidence_details: z.string().nullable(),
+});
+
+const distributionEventBrowserSchema = z.object({
+  items: z.array(z.object({
+    event_id: z.string(),
+    record_date: z.string(),
+    event_type: z.literal("idcw_cash"),
+    revisions: z.array(z.object({
+      revision_id: z.string(),
+      revision_number: z.number().int().positive(),
+      amount_per_unit_inr: z.string(),
+      is_current: z.boolean(),
+      normalization_version: z.string(),
+      normalized_at: z.string(),
+      sources: z.array(distributionSourceSchema),
+    })),
+  })),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  coverage: z.object({
+    assessment_run_id: z.string(),
+    assessment_version: z.string(),
+    coverage_status: z.enum(["events_present", "blocked_source_rows", "unverified_empty"]),
+    source_row_count: z.number().int().nonnegative(),
+    canonical_source_row_count: z.number().int().nonnegative(),
+    blocked_source_row_count: z.number().int().nonnegative(),
+    canonical_event_count: z.number().int().nonnegative(),
+    first_source_record_date: z.string().nullable(),
+    last_source_record_date: z.string().nullable(),
+    assessed_at: z.string(),
+  }).nullable(),
+});
+
 export type FundHouse = z.infer<typeof fundHouseSchema>;
 export type SchemeCategory = z.infer<typeof schemeCategorySchema>;
 export type SchemeBrowserItem = z.infer<typeof schemeBrowserItemSchema>;
 export type SchemeBrowser = z.infer<typeof schemeBrowserSchema>;
+export type SchemePerformance = z.infer<typeof schemePerformanceSchema>;
+export type DistributionEventBrowser = z.infer<typeof distributionEventBrowserSchema>;
 
 export type SchemeFilters = {
   fundHouseId: string;
@@ -197,4 +297,20 @@ export async function listSchemes(filters: SchemeFilters): Promise<SchemeBrowser
   if (filters.optionType) parameters.set("option_type", filters.optionType);
   if (filters.search.trim()) parameters.set("search", filters.search.trim());
   return schemeBrowserSchema.parse(await requestJson(`/data/schemes?${parameters}`));
+}
+
+export async function getSchemePerformance(amfiSchemeCode: string): Promise<SchemePerformance> {
+  return schemePerformanceSchema.parse(
+    await requestJson(`/data/schemes/${encodeURIComponent(amfiSchemeCode)}/performance`),
+  );
+}
+
+export async function listSchemeDistributions(
+  amfiSchemeCode: string,
+): Promise<DistributionEventBrowser> {
+  return distributionEventBrowserSchema.parse(
+    await requestJson(
+      `/data/schemes/${encodeURIComponent(amfiSchemeCode)}/distributions?limit=50&offset=0`,
+    ),
+  );
 }

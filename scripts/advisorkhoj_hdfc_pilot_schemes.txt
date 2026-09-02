@@ -1,0 +1,11 @@
+# Explicit public-page names used by the non-publishing HDFC pilot.
+HDFC Balanced Advtg Dir IDCW
+HDFC Balanced Advtg IDCW
+HDFC Credit Risk Debt Dir Hly IDCW
+HDFC Dynamic Debt Hly IDCW
+HDFC Income Dir Qly IDCW
+HDFC Liquid Dir Daily IDCW
+HDFC Money Mkt Daily IDCW
+HDFC Short Term Debt Fortn IDCW
+HDFC Flexi Cap IDCW
+HDFC Small Cap Dir IDCW

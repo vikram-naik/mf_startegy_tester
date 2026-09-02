@@ -26,7 +26,8 @@ After source data is ingested, a user can build and version a strategy in the br
 - AMFI adapters for scheme master data, `NAVAll.txt`, historical NAV, and IDCW/distribution history.
 - Content-addressed immutable raw artifact store.
 - Ingestion batches recording source URL/identifier, checksum, retrieval time, parser version, counts, and failures.
-- Strict parsers with representative fixtures and structural-change failures.
+- Strict parsers with representative fixtures and structural-change failures; distribution source
+  surveys may explicitly quarantine individual bad rows, but never structural envelope failures.
 - CLI commands for independent full/incremental ingestion; no ingestion coupled to page requests.
 
 **Exit criteria**
@@ -42,9 +43,37 @@ normalized NAV observation, including repeated and revised AMFI publications.
 
 **Current status:** AMFI fund discovery, complete/resumable historical NAV ingestion, immutable NAV
 revisions, option-level metadata versions, source lineage, zero-NAV quarantine, interval coverage,
-incremental overlap, scheduler entrypoint, and live UI coverage are implemented. Distribution/IDCW
-normalization and full lifecycle/merge resolution remain open because AMFI's distribution interface
-uses a separate scheme identifier and historical values change unit convention on 06-Apr-2009.
+incremental overlap, scheduler entrypoint, live UI coverage, resumable distribution source
+snapshots, auditable opt-in distribution row quarantine, conservative distribution candidate
+gating, and provenance-linked revisioned `DistributionEvent` publication are implemented without
+publishing portfolio cash flows. The research UI exposes NAV-only since-inception/rolling returns,
+drawdown, canonical distribution provenance, and append-only option-level distribution evidence
+coverage per scheme option. The first coverage snapshot proves that the AMFI distribution endpoint
+is materially incomplete. A first HDFC official-notice adapter now captures the declaration and a
+separate scheme-summary identity artifact, publishes exact-code multi-source provenance, and blocks
+amount conflicts. Broader historical HDFC and multi-AMC documentary coverage is optional under the
+accepted local-research source policy; AMFI, CAMS/KFintech, and AdvisorKhoj are the acquisition
+completion sources. Their acquisition runs are complete with retained source limitations, and the
+latest coverage snapshot contains 875,315 canonical events across 3,932 event-present options. The
+AMFI family/detail/launch lifecycle batch has run for all 57 fund catalogs: 10,945 of 10,981
+families have detail-backed launch events and 36 detail gaps remain. Official Nifty price/TRI/NTR
+and NSE/BSE ETF batches have also run; their acceptance report retains provisional BSE identity,
+partial-roster, empty-period, and invalid-row issues rather than repairing them heuristically. The
+21 option-level identifiers covering 208 source rows that are absent from NAV history now have
+append-only `source_only` reviews referencing their AMFI artifacts, but none has evidence for a NAV
+mapping. In addition, 440 non-positive scalar source-row versions across 109 identifiers must
+remain outside canonical cash flows, and non-zero values change unit convention on 06-Apr-2009.
+
+The distribution data-acquisition implementation has an operational precedence rule. The complete
+current AdvisorKhoj catalog (4,442 histories / 1,066,137 rows) is stored immutably with 2,243
+evidence-backed AMFI mappings and an explicit ambiguous/unresolved backlog. AdvisorKhoj can publish
+only as the tertiary fallback after AMFI and CAMS/KFintech evidence is evaluated. The required
+operator batches and acceptance reports are complete as of 1 September 2026; remaining RTA/Advisor
+identities, source conflicts, and unverified-empty options are explicit data-quality work rather
+than a reason to infer events or rerun unchanged full acquisitions. Current counts and exact
+reports are in `docs/CURRENT_STATUS.md`.
+Core accounting should begin with Growth-option NAV and canonical events only, while IDCW cash-flow
+support remains gated on explicit source trust and double-counting tests.
 
 **Deliverables**
 

@@ -1,15 +1,30 @@
+import hashlib
 import json
 import re
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlencode
 
-from mf_strategy_tester.ingestion.errors import SourceParseError
+from mf_strategy_tester.ingestion.errors import (
+    SourceParseError,
+    SourceTemporarilyUnavailableError,
+)
 
-PARSER_VERSION = "amfi-2026.08.1"
+PARSER_VERSION = "amfi-2026.08.12"
+DISTRIBUTION_PERCENTAGE_THROUGH = date(2009, 4, 6)
+_DISTRIBUTION_COMPOSITE_VALUE = re.compile(
+    r"(?P<percentage>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))%\s+"
+    r"\(Rs\s+(?P<amount>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))/-\s+Per Unit\)?",
+    flags=re.IGNORECASE,
+)
+_DISTRIBUTION_DASH_COMPOSITE_VALUE = re.compile(
+    r"(?P<percentage>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))%\s*-\s*"
+    r"Rs\s+(?P<amount>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))\s+Per Unit",
+    flags=re.IGNORECASE,
+)
 CURRENT_NAV_URL = "https://portal.amfiindia.com/spages/NAVAll.txt"
 HISTORICAL_NAV_URL = "https://portal.amfiindia.com/DownloadNAVHistoryReport_Po.aspx"
 AMFI_API_URL = "https://www.amfiindia.com/api"
@@ -19,9 +34,17 @@ CURRENT_NAV_HEADER = (
     "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;"
     "Scheme Name;Net Asset Value;Date"
 )
+CURRENT_NAV_HEADER_WITH_QUALIFIERS = (
+    "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;"
+    "Scheme Name;Plan;Option;Net Asset Value;Date"
+)
 HISTORICAL_NAV_HEADER = (
     "Scheme Code;Scheme Name;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;"
     "Net Asset Value;Repurchase Price;Sale Price;Date"
+)
+HISTORICAL_NAV_HEADER_WITH_QUALIFIERS = (
+    "Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;"
+    "ISIN Div Reinvestment;Net Asset Value;Date"
 )
 
 
@@ -53,6 +76,7 @@ class AmfiSourceRequest:
     url: str
     parameters: dict[str, str]
     parser: ArtifactParser
+    provider: str = field(default="amfi", init=False)
 
 
 @dataclass(frozen=True)
@@ -65,6 +89,8 @@ class NavSourceRecord:
     nav_date: date
     scheme_classification: str
     fund_house: str
+    source_plan: str | None = None
+    source_option: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,9 +104,31 @@ class InvalidNavSourceRecord:
     scheme_classification: str
     fund_house: str
     rejection_reason: str
+    source_plan: str | None = None
+    source_option: str | None = None
 
 
 NavParsedRecord = NavSourceRecord | InvalidNavSourceRecord
+
+
+@dataclass(frozen=True)
+class _NavFieldMap:
+    scheme_code: int
+    scheme_name: int
+    payout_isin: int
+    reinvestment_isin: int
+    nav: int
+    nav_date: int
+    plan: int | None = None
+    option: int | None = None
+
+
+_NAV_FIELD_MAPS = {
+    CURRENT_NAV_HEADER: _NavFieldMap(0, 3, 1, 2, 4, 5),
+    CURRENT_NAV_HEADER_WITH_QUALIFIERS: _NavFieldMap(0, 3, 1, 2, 6, 7, 4, 5),
+    HISTORICAL_NAV_HEADER: _NavFieldMap(0, 1, 2, 3, 4, 7),
+    HISTORICAL_NAV_HEADER_WITH_QUALIFIERS: _NavFieldMap(0, 1, 4, 5, 6, 7, 2, 3),
+}
 
 
 @dataclass(frozen=True)
@@ -108,9 +156,39 @@ class SchemeDetailRecord:
 
 @dataclass(frozen=True)
 class DistributionSourceRecord:
+    mutual_fund_id: str
+    source_option_id: str
+    source_scheme_id: str
+    scheme_name: str
     nav_name: str
-    record_date: datetime
-    source_value: str
+    record_date: date
+    raw_source_value: str
+    source_value: Decimal | None
+    ratio_numerator: int | None
+    ratio_denominator: int | None
+    annotated_amount_per_unit_inr: Decimal | None
+    source_record_signature: str
+    source_plan: str | None = None
+    source_option: str | None = None
+
+
+@dataclass(frozen=True)
+class DistributionParseIssue:
+    record_number: int
+    issue_code: str
+    error_details: str
+    raw_record: Any
+    source_record_signature: str
+
+
+@dataclass(frozen=True)
+class DistributionParseResult:
+    records: tuple[DistributionSourceRecord, ...]
+    issues: tuple[DistributionParseIssue, ...]
+
+    @property
+    def rows_received(self) -> int:
+        return len(self.records) + len(self.issues)
 
 
 class AmfiNavParser:
@@ -124,6 +202,10 @@ class AmfiNavParser:
 
     def parse_records(self, payload: bytes) -> tuple[NavParsedRecord, ...]:
         text = _decode_utf8(payload)
+        if _is_amfi_nav_application_error(text):
+            raise SourceTemporarilyUnavailableError(
+                "AMFI NAV endpoint returned its application-error page"
+            )
         if "No data found on the basis of selected parameters for this report" in text:
             if self._allow_empty_report:
                 return ()
@@ -134,11 +216,8 @@ class AmfiNavParser:
             raise SourceParseError("AMFI NAV source is empty")
 
         header = lines[header_index].strip()
-        if header == CURRENT_NAV_HEADER:
-            historical = False
-        elif header == HISTORICAL_NAV_HEADER:
-            historical = True
-        else:
+        field_map = _NAV_FIELD_MAPS.get(header)
+        if field_map is None:
             raise SourceParseError(f"unexpected AMFI NAV header at source line {header_index + 1}")
 
         records: list[NavParsedRecord] = []
@@ -163,13 +242,28 @@ class AmfiNavParser:
                     f"NAV row has no classification/fund house at source line {index}"
                 )
             fields = [field.strip() for field in line.split(";")]
-            expected_fields = 8 if historical else 6
+            expected_fields = (
+                max(
+                    index
+                    for index in (
+                        field_map.scheme_code,
+                        field_map.scheme_name,
+                        field_map.payout_isin,
+                        field_map.reinvestment_isin,
+                        field_map.nav,
+                        field_map.nav_date,
+                        field_map.plan or 0,
+                        field_map.option or 0,
+                    )
+                )
+                + 1
+            )
             if len(fields) != expected_fields:
                 raise SourceParseError(
                     f"AMFI NAV parser expected {expected_fields} fields but received "
                     f"{len(fields)} at source line {index}"
                 )
-            record = self._parse_row(fields, index, historical, classification, fund_house)
+            record = self._parse_row(fields, index, field_map, classification, fund_house)
             key = (record.scheme_code, record.nav_date)
             if key in seen:
                 raise SourceParseError(
@@ -187,14 +281,18 @@ class AmfiNavParser:
     def _parse_row(
         fields: list[str],
         line_number: int,
-        historical: bool,
+        field_map: _NavFieldMap,
         classification: str,
         fund_house: str,
     ) -> NavParsedRecord:
-        if historical:
-            scheme_code, name, payout, reinvestment, nav_text, _, _, date_text = fields
-        else:
-            scheme_code, payout, reinvestment, name, nav_text, date_text = fields
+        scheme_code = fields[field_map.scheme_code]
+        name = fields[field_map.scheme_name]
+        payout = fields[field_map.payout_isin]
+        reinvestment = fields[field_map.reinvestment_isin]
+        nav_text = fields[field_map.nav]
+        date_text = fields[field_map.nav_date]
+        source_plan = fields[field_map.plan] or None if field_map.plan is not None else None
+        source_option = fields[field_map.option] or None if field_map.option is not None else None
         if not scheme_code.isdigit():
             raise SourceParseError(f"invalid scheme code at source line {line_number}")
         if not name:
@@ -220,6 +318,8 @@ class AmfiNavParser:
                 scheme_classification=classification,
                 fund_house=fund_house,
                 rejection_reason="NAV is not a non-negative finite decimal",
+                source_plan=source_plan,
+                source_option=source_option,
             )
         return NavSourceRecord(
             scheme_code=scheme_code,
@@ -230,6 +330,8 @@ class AmfiNavParser:
             nav_date=nav_date,
             scheme_classification=classification,
             fund_house=fund_house,
+            source_plan=source_plan,
+            source_option=source_option,
         )
 
 
@@ -274,8 +376,8 @@ class AmfiSchemeListParser:
 
     def parse_records(self, payload: bytes) -> tuple[SchemeListRecord, ...]:
         value = _parse_json(payload)
-        if not isinstance(value, list) or not value:
-            raise SourceParseError("AMFI scheme list must be a non-empty JSON array")
+        if not isinstance(value, list):
+            raise SourceParseError("AMFI scheme list must be a JSON array")
         records: list[SchemeListRecord] = []
         seen: set[str] = set()
         for index, item in enumerate(value, start=1):
@@ -295,13 +397,17 @@ class AmfiSchemeListParser:
 
 class AmfiSchemeDetailsParser:
     version = PARSER_VERSION
-    _required_fields = frozenset(
+    _fields = frozenset(
         {
             "MF_Name",
             "Scheme_Name",
+            "Scheme_Objective",
             "SchemeType_Desc",
             "SchemeCat_Desc",
             "Launch_Date",
+            "Scheme_load",
+            "Scheme_min_amt",
+            "AMC_Website",
             "scheme_Id",
             "MF_Id",
         }
@@ -317,16 +423,28 @@ class AmfiSchemeDetailsParser:
             raise SourceParseError("AMFI scheme details must contain a non-empty data array")
         records: list[SchemeDetailRecord] = []
         for index, item in enumerate(data, start=1):
-            if not isinstance(item, dict) or not self._required_fields.issubset(item):
+            if not isinstance(item, dict) or set(item) != self._fields:
                 raise SourceParseError(f"unexpected scheme-details structure at record {index}")
+            mutual_fund_id = str(item["MF_Id"])
+            scheme_id = str(item["scheme_Id"])
+            if not mutual_fund_id.isdigit() or not scheme_id.isdigit():
+                raise SourceParseError(f"invalid scheme-details identity at record {index}")
             try:
                 launch_date = datetime.fromisoformat(str(item["Launch_Date"]))
             except ValueError as error:
                 raise SourceParseError(f"invalid launch date at record {index}") from error
+            if launch_date.tzinfo is None or launch_date.utcoffset() is None:
+                raise SourceParseError(
+                    f"launch date must include a timezone offset at record {index}"
+                )
+            if launch_date.utcoffset() != timedelta(hours=5, minutes=30):
+                raise SourceParseError(
+                    f"launch date must use the Asia/Kolkata UTC offset at record {index}"
+                )
             records.append(
                 SchemeDetailRecord(
-                    mutual_fund_id=str(item["MF_Id"]),
-                    scheme_id=str(item["scheme_Id"]),
+                    mutual_fund_id=mutual_fund_id,
+                    scheme_id=scheme_id,
                     mutual_fund_name=_required_text(item["MF_Name"], "MF_Name", index),
                     scheme_name=_required_text(item["Scheme_Name"], "Scheme_Name", index),
                     scheme_type=_required_text(item["SchemeType_Desc"], "SchemeType_Desc", index),
@@ -339,35 +457,133 @@ class AmfiSchemeDetailsParser:
 
 class AmfiDistributionParser:
     version = PARSER_VERSION
-    _required_fields = frozenset({"Nav_name", "Div_year", "Rate_of_div"})
+    _legacy_fields = frozenset(
+        {
+            "MF_ID",
+            "SD_ID",
+            "scheme_id",
+            "Scheme_Name",
+            "Nav_name",
+            "Div_year",
+            "year",
+            "Rate_of_div",
+        }
+    )
+    _qualified_fields = _legacy_fields | {"Plan", "Option"}
 
     def validate(self, payload: bytes) -> int:
         return len(self.parse_records(payload))
 
     def parse_records(self, payload: bytes) -> tuple[DistributionSourceRecord, ...]:
+        result = self.parse_with_issues(payload)
+        if result.issues:
+            raise SourceParseError(result.issues[0].error_details)
+        return result.records
+
+    def parse_with_issues(self, payload: bytes) -> DistributionParseResult:
         value = _parse_json(payload)
         data = value.get("data") if isinstance(value, dict) else None
         if not isinstance(data, list):
             raise SourceParseError("AMFI distribution response must contain a data array")
         records: list[DistributionSourceRecord] = []
+        issues: list[DistributionParseIssue] = []
+        seen: set[tuple[str, date]] = set()
         for index, item in enumerate(data, start=1):
-            if not isinstance(item, dict) or not self._required_fields.issubset(item):
-                raise SourceParseError(f"unexpected distribution structure at record {index}")
+            signature = _json_signature(item)
             try:
-                record_date = datetime.fromisoformat(str(item["Div_year"]).replace("Z", "+00:00"))
-            except ValueError as error:
-                raise SourceParseError(f"invalid distribution date at record {index}") from error
-            source_value = str(item["Rate_of_div"]).strip()
-            if not source_value:
-                raise SourceParseError(f"empty distribution value at record {index}")
-            records.append(
-                DistributionSourceRecord(
-                    nav_name=_required_text(item["Nav_name"], "Nav_name", index),
-                    record_date=record_date,
-                    source_value=source_value,
+                record = self._parse_record(item, index, signature)
+                key = (record.source_option_id, record.record_date)
+                if key in seen:
+                    raise SourceParseError(
+                        f"duplicate distribution option/date "
+                        f"{record.source_option_id}/{record.record_date} at record {index}"
+                    )
+            except SourceParseError as error:
+                issues.append(
+                    DistributionParseIssue(
+                        record_number=index,
+                        issue_code="SOURCE_PARSE_ERROR",
+                        error_details=str(error),
+                        raw_record=item,
+                        source_record_signature=signature,
+                    )
                 )
+                continue
+            seen.add(key)
+            records.append(record)
+        return DistributionParseResult(records=tuple(records), issues=tuple(issues))
+
+    def _parse_record(
+        self, item: object, index: int, source_record_signature: str
+    ) -> DistributionSourceRecord:
+        if not isinstance(item, dict) or frozenset(item) not in {
+            self._legacy_fields,
+            self._qualified_fields,
+        }:
+            raise SourceParseError(f"unexpected distribution structure at record {index}")
+        mutual_fund_id = _numeric_text(item["MF_ID"], "MF_ID", index)
+        source_option_id = _numeric_text(item["SD_ID"], "SD_ID", index)
+        source_scheme_id = _numeric_text(item["scheme_id"], "scheme_id", index)
+        try:
+            timestamp = datetime.fromisoformat(str(item["Div_year"]).replace("Z", "+00:00"))
+        except ValueError as error:
+            raise SourceParseError(f"invalid distribution date at record {index}") from error
+        if (
+            timestamp.tzinfo is None
+            or timestamp.timetz().replace(tzinfo=None) != datetime.min.time()
+        ):
+            raise SourceParseError(
+                f"distribution date must be timezone-aware midnight at record {index}"
             )
-        return tuple(records)
+        record_date = timestamp.date()
+        if str(item["year"]) != str(record_date.year):
+            raise SourceParseError(f"distribution year mismatch at record {index}")
+        raw_source_value = str(item["Rate_of_div"]).strip()
+        source_plan = _optional_source_text(item.get("Plan"), "Plan", index)
+        source_option = _optional_source_text(item.get("Option"), "Option", index)
+        composite_match = _DISTRIBUTION_COMPOSITE_VALUE.fullmatch(
+            raw_source_value
+        ) or _DISTRIBUTION_DASH_COMPOSITE_VALUE.fullmatch(raw_source_value)
+        ratio_match = re.fullmatch(r"([1-9][0-9]*):([1-9][0-9]*)", raw_source_value)
+        if composite_match is not None:
+            source_value = Decimal(composite_match.group("percentage"))
+            ratio_numerator = None
+            ratio_denominator = None
+            annotated_amount_per_unit_inr = Decimal(composite_match.group("amount"))
+            if annotated_amount_per_unit_inr <= 0:
+                raise SourceParseError(f"invalid distribution value at record {index}")
+        elif ratio_match is not None:
+            source_value = None
+            ratio_numerator = int(ratio_match.group(1))
+            ratio_denominator = int(ratio_match.group(2))
+            annotated_amount_per_unit_inr = None
+        else:
+            numeric_source_value = raw_source_value.removesuffix("%").strip()
+            try:
+                source_value = Decimal(numeric_source_value)
+                if not source_value.is_finite() or source_value < 0:
+                    raise InvalidOperation
+            except InvalidOperation as error:
+                raise SourceParseError(f"invalid distribution value at record {index}") from error
+            ratio_numerator = None
+            ratio_denominator = None
+            annotated_amount_per_unit_inr = None
+        return DistributionSourceRecord(
+            mutual_fund_id=mutual_fund_id,
+            source_option_id=source_option_id,
+            source_scheme_id=source_scheme_id,
+            scheme_name=_required_text(item["Scheme_Name"], "Scheme_Name", index),
+            nav_name=_required_text(item["Nav_name"], "Nav_name", index),
+            record_date=record_date,
+            raw_source_value=raw_source_value,
+            source_value=source_value,
+            ratio_numerator=ratio_numerator,
+            ratio_denominator=ratio_denominator,
+            annotated_amount_per_unit_inr=annotated_amount_per_unit_inr,
+            source_record_signature=source_record_signature,
+            source_plan=source_plan,
+            source_option=source_option,
+        )
 
 
 def current_nav_request() -> AmfiSourceRequest:
@@ -462,11 +678,45 @@ def _decode_utf8(payload: bytes) -> str:
         raise SourceParseError("AMFI source is not valid UTF-8") from error
 
 
+def _is_amfi_nav_application_error(text: str) -> bool:
+    """Recognize AMFI's HTTP-200 transient failure without masking format drift."""
+    return (
+        "<html" in text.lower()
+        and "View/Download NAV History" in text
+        and "Application Error! Please try again later" in text
+    )
+
+
 def _parse_json(payload: bytes) -> object:
     try:
         return json.loads(_decode_utf8(payload))
     except json.JSONDecodeError as error:
         raise SourceParseError(f"AMFI source is not valid JSON at character {error.pos}") from error
+
+
+def _json_signature(value: object) -> str:
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _numeric_text(value: object, field: str, record_number: int) -> str:
+    normalized = str(value)
+    if isinstance(value, bool) or not normalized.isdigit():
+        raise SourceParseError(f"invalid {field} at record {record_number}")
+    return normalized
+
+
+def _optional_source_text(value: object, field: str, record_number: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SourceParseError(f"invalid {field} at record {record_number}")
+    return value.strip() or None
 
 
 def _is_scheme_classification(value: str) -> bool:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -23,18 +25,24 @@ from mf_strategy_tester.ingestion.amfi import (
     historical_nav_request,
 )
 from mf_strategy_tester.ingestion.artifacts import ArtifactStore
+from mf_strategy_tester.ingestion.errors import SourceTemporarilyUnavailableError
 from mf_strategy_tester.repositories.ingestion import IngestionRepository
 from mf_strategy_tester.services.nav_publication import (
     FundCatalogPublisher,
     NavPublicationStats,
     NormalizedNavPublisher,
 )
-from mf_strategy_tester.services.source_ingestion import IngestionResult, SourceIngestionService
+from mf_strategy_tester.services.source_ingestion import (
+    IngestionResult,
+    SourceIngestionService,
+    SourceRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 EARLIEST_AMFI_NAV_DATE = date(2006, 4, 1)
 MAX_AMFI_REQUEST_DAYS = 90
+AMFI_TRANSIENT_RETRY_DELAYS_SECONDS = (2.0, 5.0, 10.0, 20.0)
 
 
 @dataclass(frozen=True)
@@ -64,11 +72,14 @@ class NavSyncService:
         ingestion_service: SourceIngestionService,
         ingestion_repository: IngestionRepository,
         artifact_store: ArtifactStore,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._session = session
         self._ingestion = ingestion_service
         self._repository = ingestion_repository
         self._artifacts = artifact_store
+        self._sleep = sleep
         self._nav_publisher = NormalizedNavPublisher(session)
         self._fund_publisher = FundCatalogPublisher(session)
 
@@ -129,7 +140,7 @@ class NavSyncService:
                     overlap_days=overlap_days,
                 )
             if include_current_feed:
-                current_result = self._ingestion.ingest(current_nav_request())
+                current_result = self._ingest_nav_request(current_nav_request())
                 current_records = AmfiNavParser().parse_records(self._payload(current_result))
                 stats = self._nav_publisher.publish(
                     current_records, batch_id=current_result.batch_id
@@ -187,7 +198,7 @@ class NavSyncService:
                 to_date=chunk_end,
                 scheme_type=SchemeType.ALL,
             )
-            ingestion_result = self._ingestion.ingest(request)
+            ingestion_result = self._ingest_nav_request(request)
             records = AmfiNavParser(allow_empty_report=True).parse_records(
                 self._payload(ingestion_result)
             )
@@ -220,6 +231,29 @@ class NavSyncService:
             chunk_start = chunk_end + timedelta(days=1)
         run.funds_completed += 1
         self._session.commit()
+
+    def _ingest_nav_request(self, request: SourceRequest) -> IngestionResult:
+        for attempt, delay_seconds in enumerate(
+            (*AMFI_TRANSIENT_RETRY_DELAYS_SECONDS, None), start=1
+        ):
+            try:
+                return self._ingestion.ingest(request)
+            except SourceTemporarilyUnavailableError:
+                if delay_seconds is None:
+                    raise
+                logger.warning(
+                    "amfi_nav_transient_response_retry",
+                    extra={
+                        "event_data": {
+                            "attempt": attempt,
+                            "retry_delay_seconds": delay_seconds,
+                            "source_type": request.source_type.value,
+                            "request_parameters": request.parameters,
+                        }
+                    },
+                )
+                self._sleep(delay_seconds)
+        raise AssertionError("AMFI transient retry loop terminated unexpectedly")
 
     def _next_uncovered_interval(
         self, fund_id: str, requested_start: date, requested_end: date
