@@ -852,7 +852,7 @@ class RtaSchemeMappingReviewRecord(Base):
             name="ck_rta_mapping_shape",
         ),
         CheckConstraint(
-            "mapping_method IN ('exact_name_plan_nav', 'manual', 'none')",
+            "mapping_method IN ('exact_name_plan_nav', 'nav_fingerprint', 'manual', 'none')",
             name="ck_rta_mapping_method",
         ),
         CheckConstraint("length(review_signature) = 64", name="ck_rta_mapping_signature_length"),

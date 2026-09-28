@@ -16,6 +16,19 @@ from mf_strategy_tester.db.models import (
 )
 
 _BACKLOG_STATUSES = frozenset({"unresolved", "ambiguous"})
+_RTA_FINGERPRINT_BACKLOG_REASONS = {
+    "unresolved": frozenset(
+        {
+            "insufficient_nav_fingerprint_evidence",
+            "no_nav_fingerprint_candidate",
+            "nav_fingerprint_conflict",
+            "nav_fingerprint_low_information",
+            "nav_fingerprint_amount_disagreement",
+            "insufficient_nav_fingerprint_matches",
+        }
+    ),
+    "ambiguous": frozenset({"multiple_nav_fingerprint_candidates"}),
+}
 
 
 @dataclass(frozen=True)
@@ -241,6 +254,14 @@ def _assess_rta_evidence(review: RtaSchemeMappingReviewRecord) -> _EvidenceAsses
         if len(candidate_codes) < 2:
             raise RuntimeError(f"ambiguous RTA review {review.id} has fewer than two candidates")
         reason = "multiple_exact_name_plan_nav_candidates"
+    fingerprint = evidence.get("nav_fingerprint")
+    if fingerprint is not None:
+        fingerprint_reason = fingerprint.get("reason") if isinstance(fingerprint, dict) else None
+        if fingerprint_reason not in _RTA_FINGERPRINT_BACKLOG_REASONS[review.status]:
+            raise RuntimeError(
+                f"{review.status} RTA review {review.id} has invalid NAV fingerprint reason"
+            )
+        reason = str(fingerprint_reason)
     return _EvidenceAssessment(reason, len(candidate_codes), candidate_codes)
 
 

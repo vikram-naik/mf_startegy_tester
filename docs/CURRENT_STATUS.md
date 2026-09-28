@@ -2,8 +2,8 @@
 
 **Authoritative conversation-reset checkpoint:** 2026-09-04 (`Asia/Kolkata`)
 **Branch:** `main`
-**Repository migration head:** `20260904_0032`
-**Local dataset migration applied:** `20260904_0032`
+**Repository migration head:** `20260928_0034`
+**Local dataset migration applied:** `20260904_0032` (as of the 2026-09-04 checkpoint)
 
 Read `CLAUDE.md` before changing code. This file supersedes older numeric status and next-step
 statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronological audit log.
@@ -27,6 +27,27 @@ statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronolog
   research data; do not reset, clean, or delete it.
 - The product direction is now a customized cross-fund-house performance screener. Strategy
   construction, portfolio accounting, and backtesting are out of scope.
+
+## Raw artifact store removed (2026-09-28)
+
+To free disk space, the operator deleted the content-addressed raw artifact store (`data/raw`,
+about 100 GB) and all database backups on 2026-09-28. `source_artifacts` rows and every
+provenance link remain in `data/research.db`, but the files they name no longer exist for
+artifacts retrieved before that date. Consequences:
+
+- Normalized observations stay traceable to provider, URL, retrieval time, checksum, parser
+  version, and batch, but the original bytes cannot be re-read or re-parsed offline.
+- Captures that embed their own source payloads and checksums survive outside the store:
+  `data/rta-captures/*.jsonl` (CAMS/KFintech HTML per scheme) and
+  `data/advisorkhoj-captures/*` (catalog and detail responses).
+- Lost evidence that the sources can still serve (AMFI historical NAV, NSE/BSE archives, HDFC
+  PDFs) can be re-acquired and must match the recorded checksum to count as the same artifact.
+  Point-in-time snapshots (daily AMFI current-NAV feeds, earlier AMFI distribution API states)
+  cannot be recovered.
+- Ingestion keeps working: `ArtifactStore.store` re-creates a missing file whenever the same
+  content is downloaded again, and all new artifacts are stored normally.
+- `research.db` is now the only copy of canonical data. Keep at least one compressed backup,
+  preferably on another disk.
 
 ## Completion decision
 
@@ -141,6 +162,38 @@ The final CAMS breadth report retained 997 prior scheme failures, 54 new scheme 
 page timeouts for ASK, ICICI Prudential, and Unifi while continuing across the remaining roster.
 Their responses/failures remain auditable source limitations. AdvisorKhoj is the accepted broad
 tertiary fallback; another unchanged full CAMS run is not recommended.
+
+### NAV-fingerprint remap: first run and pending corrective run (2026-09-28)
+
+The statement above that every unresolved RTA capture has zero candidates describes the
+name-first rule only. Code now falls back to a NAV-fingerprint identity rule when no name candidate
+exists (see `docs/RTA_DISTRIBUTIONS.md`); published amounts remain the RTA's declared values.
+
+The first run (`rta-nav-fingerprint-2026.09.1`, `kfintech-full.jsonl` only, normalization run
+`215c30c6-5090-483e-a6ef-cb4ad3436566`) moved nonempty unmapped KFintech captures from 3,422 to
+3,015 and inserted 66,225 events. On 65,911 option/date pairs shared with AdvisorKhoj, 65,677
+amounts were identical. It also exposed a defect: six fingerprint captures, all daily/weekly IDCW
+options of liquid, ultra-short, or overnight funds (Baroda BNP Paribas, Canara Robeco, JM),
+matched other plans' near-constant NAV series. Their disagreeing rows retired 9,750 existing
+CAMS/KFintech values, and code `138287` disagreed with AdvisorKhoj on all 63 shared dates. Rule
+`2026.09.2` rejects low-information NAV series, requires declared-amount corroboration, and never
+lets a fingerprint row retire an existing RTA value. `reconcile-rta-nav-fingerprint` retires values
+backed only by withdrawn fingerprint identities and restores displaced values.
+
+Pending: after a database backup, run offline
+
+```bash
+./scripts/remap_rta_nav_fingerprint.sh
+```
+
+It re-evaluates every KFintech capture file, including the 5 September refresh and targeted retry
+files that the first run did not touch, then reconciles. Until it runs, the local canonical
+dataset contains the first run's defect.
+
+The first run's 2025 payout-gap report found 4,914 IDCW options live since 2025-01-01, of which
+1,977 had a declared payout since that date. SBI, UTI, Tata, Kotak, and Nippon account for 38% of
+the 2,937 options without one; SBI had 13 of 303. These are acquisition gaps, not evidence of no
+payout.
 
 ### AdvisorKhoj tertiary source
 
