@@ -70,43 +70,71 @@ per record date, plus the page's latest NAV). Only the AMFI identity is inferred
 amount is always the RTA's declared Individual/Retail value, and nothing is derived from NAV
 movements.
 
-The fallback (`rta-nav-fingerprint-2026.09.1`, mapping method `nav_fingerprint`) maps a capture
+The fallback (`rta-nav-fingerprint-2026.09.2`, mapping method `nav_fingerprint`) maps a capture
 only when exactly one current AMFI option qualifies:
 
 1. its NAV-attached metadata is IDCW and its plan equals an explicit RTA Direct/Regular plan;
 2. it is found through up to four recent probe dates whose evidence values are pairwise distinct,
    matching at least two of them when two or more exist;
 3. at least three evidence dates match exactly (Decimal equality), spanning at least 30 days, with
-   at least two distinct matched values, so a constant-NAV option (for example 10.0000) cannot
-   qualify; and
-4. on every date where it has a current valid AMFI NAV, that NAV equals one of the RTA values for
-   that date (ex or cum); any mismatch blocks the candidate.
+   at least two distinct matched values;
+4. the matched NAVs are distinct on at least half of the matched dates. Daily and weekly IDCW
+   options of liquid, overnight, and ultra-short funds hold NAV near-constant by design, so
+   several legacy plans share one NAV series and NAV alone cannot tell them apart;
+5. on every date where it has a current valid AMFI NAV, that NAV equals one of the RTA values for
+   that date (ex or cum); any mismatch blocks the candidate; and
+6. from 2020-04-01, the capture's declared amounts disagree with the latest value other evidence
+   holds for the same option and record date on at most 10% of shared dates. Earlier dates are not
+   compared because per-unit rates differed by investor class under dividend distribution tax.
+   With no shared date, NAV evidence stands alone.
 
 Several qualifying options remain `ambiguous`, as do identical-NAV twins. Evidence JSON retains
-probe dates, every candidate's match/conflict counts with recent samples, and a reason code:
-`unique_nav_fingerprint`, `multiple_nav_fingerprint_candidates`, `nav_fingerprint_conflict`,
-`insufficient_nav_fingerprint_matches`, `no_nav_fingerprint_candidate`, or
-`insufficient_nav_fingerprint_evidence`. `distribution-identity-backlog-report` groups the
-remaining backlog by these reasons.
+probe dates, every candidate's match/conflict counts with recent samples, the amount
+corroboration, and a reason code: `unique_nav_fingerprint`, `multiple_nav_fingerprint_candidates`,
+`nav_fingerprint_conflict`, `nav_fingerprint_low_information`,
+`nav_fingerprint_amount_disagreement`, `insufficient_nav_fingerprint_matches`,
+`no_nav_fingerprint_candidate`, or `insufficient_nav_fingerprint_evidence`.
+`distribution-identity-backlog-report` groups the remaining backlog by these reasons.
+
+A fingerprint identity is weaker evidence than a name/plan/NAV or manual identity. When a
+fingerprint-identified row disagrees with an existing CAMS/KFintech value, the row is blocked with
+an `amount_conflict` issue marked `existing_value_retired=false`; it never retires that value.
 
 CAMS captures carry only one latest NAV and no per-row NAV, so they cannot meet this rule; the
 fallback mainly affects KFintech. Name-path conclusions and manual mappings are unchanged.
 
-Re-evaluate already imported captures offline (no RTA request) and publish newly mapped rows:
+### Remap and reconciliation
+
+Re-evaluate already imported captures offline (no RTA request), publish newly mapped rows, and
+reconcile canonical values:
 
 ```bash
 ./scripts/remap_rta_nav_fingerprint.sh
-./scripts/remap_rta_nav_fingerprint.sh data/rta-captures/kfintech-full.jsonl \
-  data/rta-captures/cams-full.jsonl
 ```
 
-The script runs migrations, writes before/after payout-gap and backlog reports, runs
-`resume-rta-distribution-import` per file, refreshes coverage, and writes
-`data/rta-reports/nav-fingerprint-remap-<timestamp>.log` and `.status`. It is idempotent: reviews
-are deduplicated by signature and already linked rows are skipped. Migration `20260928_0034`
-rebuilds `rta_scheme_mapping_reviews` to allow `nav_fingerprint`; back up the database first, for
-example `sqlite3 data/research.db ".backup data/research-pre-0034.db"`. Its downgrade refuses to
-run once any `nav_fingerprint` review exists.
+With no arguments the script processes every `data/rta-captures/kfintech-*.jsonl` capture, skipping
+error sidecars; explicit capture files may be passed instead. It runs migrations, writes
+before/after payout-gap and backlog reports, runs `resume-rta-distribution-import` per file, then
+`reconcile-rta-nav-fingerprint`, refreshes coverage, and writes
+`data/rta-reports/nav-fingerprint-remap-<timestamp>.log`, `.status`, and `-reconcile.json`.
+Reconciliation is skipped if any capture file fails to re-evaluate.
+
+`reconcile-rta-nav-fingerprint` examines only events on dates where a fingerprint-identified
+capture has rows. A revision stays valid while any source behind it is still accepted: an AMFI,
+official-notice, or AdvisorKhoj link, or an RTA row whose capture's latest review maps to that
+option. A current revision with no valid source is retired, and the latest valid revision becomes
+current again, unless a CAMS/KFintech conflict between non-fingerprint rows or an AdvisorKhoj
+same-priority conflict exists for that event; such events are left without a current value.
+Revisions are never deleted; the report lists every retired and restored revision ID. Preview it
+with `backend/.venv/bin/mfst reconcile-rta-nav-fingerprint --dry-run`. It is idempotent.
+
+Migration `20260928_0034` rebuilds `rta_scheme_mapping_reviews` to allow `nav_fingerprint`; back up
+the database first, for example `sqlite3 data/research.db ".backup data/research-pre-0034.db"`.
+Its downgrade refuses to run once any `nav_fingerprint` review exists.
+
+Known limitation: if a later name-mapped row disagrees with a current value backed only by a
+fingerprint identity, the ordinary peer-conflict rule still retires that value and leaves the
+event for review.
 
 Scheme-core normalization removes only source presentation decorations that do not identify an
 economic option, including CAMS reinvestment/exchange suffixes and obsolete-name clauses beginning

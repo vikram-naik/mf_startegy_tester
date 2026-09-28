@@ -142,21 +142,37 @@ page timeouts for ASK, ICICI Prudential, and Unifi while continuing across the r
 Their responses/failures remain auditable source limitations. AdvisorKhoj is the accepted broad
 tertiary fallback; another unchanged full CAMS run is not recommended.
 
-### Pending operator step: NAV-fingerprint remap (added 2026-09-28)
+### NAV-fingerprint remap: first run and pending corrective run (2026-09-28)
 
 The statement above that every unresolved RTA capture has zero candidates describes the
 name-first rule only. Code now falls back to a NAV-fingerprint identity rule when no name candidate
-exists (see `docs/RTA_DISTRIBUTIONS.md`); published amounts remain the RTA's declared values. It
-has not yet been run against the local dataset, so the counts in this file are unchanged. After a
-database backup, run offline:
+exists (see `docs/RTA_DISTRIBUTIONS.md`); published amounts remain the RTA's declared values.
+
+The first run (`rta-nav-fingerprint-2026.09.1`, `kfintech-full.jsonl` only, normalization run
+`215c30c6-5090-483e-a6ef-cb4ad3436566`) moved nonempty unmapped KFintech captures from 3,422 to
+3,015 and inserted 66,225 events. On 65,911 option/date pairs shared with AdvisorKhoj, 65,677
+amounts were identical. It also exposed a defect: six fingerprint captures, all daily/weekly IDCW
+options of liquid, ultra-short, or overnight funds (Baroda BNP Paribas, Canara Robeco, JM),
+matched other plans' near-constant NAV series. Their disagreeing rows retired 9,750 existing
+CAMS/KFintech values, and code `138287` disagreed with AdvisorKhoj on all 63 shared dates. Rule
+`2026.09.2` rejects low-information NAV series, requires declared-amount corroboration, and never
+lets a fingerprint row retire an existing RTA value. `reconcile-rta-nav-fingerprint` retires values
+backed only by withdrawn fingerprint identities and restores displaced values.
+
+Pending: after a database backup, run offline
 
 ```bash
 ./scripts/remap_rta_nav_fingerprint.sh
 ```
 
-Then inspect the before/after `distribution-payout-gap-report` files it writes, which restrict the
-universe to IDCW options live since 2025-01-01, to decide which fund houses still need official
-evidence.
+It re-evaluates every KFintech capture file, including the 5 September refresh and targeted retry
+files that the first run did not touch, then reconciles. Until it runs, the local canonical
+dataset contains the first run's defect.
+
+The first run's 2025 payout-gap report found 4,914 IDCW options live since 2025-01-01, of which
+1,977 had a declared payout since that date. SBI, UTI, Tata, Kotak, and Nippon account for 38% of
+the 2,937 options without one; SBI had 13 of 303. These are acquisition gaps, not evidence of no
+payout.
 
 ### AdvisorKhoj tertiary source
 

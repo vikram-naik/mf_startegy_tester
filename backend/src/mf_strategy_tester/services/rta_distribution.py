@@ -48,10 +48,17 @@ logger = logging.getLogger(__name__)
 RTA_NORMALIZATION_VERSION = "rta-distribution-2026.08.6"
 _EVENT_TYPE = "idcw_cash"
 _EARLIEST_PLAUSIBLE_RECORD_DATE = date(1964, 1, 1)
-_FINGERPRINT_POLICY_VERSION = "rta-nav-fingerprint-2026.09.1"
+_FINGERPRINT_POLICY_VERSION = "rta-nav-fingerprint-2026.09.2"
 _FINGERPRINT_MIN_MATCHES = 3
 _FINGERPRINT_MIN_SPAN_DAYS = 30
 _FINGERPRINT_MIN_DISTINCT_VALUES = 2
+# Daily/weekly IDCW options hold NAV near-constant, so several plans share one NAV series.
+# At least half of the matched dates must carry distinct NAVs for the series to identify.
+_FINGERPRINT_MIN_DISTINCT_SHARE_PERCENT = 50
+# Declared amounts must corroborate the identity where another source covers the same date.
+# Before April 2020 per-unit rates differed by investor class under dividend distribution tax.
+_FINGERPRINT_AMOUNT_COMPARISON_START = date(2020, 4, 1)
+_FINGERPRINT_MAX_AMOUNT_DISAGREEMENT_PERCENT = 10
 _FINGERPRINT_MAX_PROBES = 4
 _FINGERPRINT_MIN_PROBE_MATCHES = 2
 _FINGERPRINT_PREFILTER_TOLERANCE = 1e-6
@@ -151,13 +158,22 @@ class _FingerprintCandidate:
         return (self.matches[-1] - self.matches[0]).days if self.matches else 0
 
     @property
-    def qualifying(self) -> bool:
+    def sufficient(self) -> bool:
         return (
-            not self.conflicts
-            and len(self.matches) >= _FINGERPRINT_MIN_MATCHES
+            len(self.matches) >= _FINGERPRINT_MIN_MATCHES
             and self.span_days >= _FINGERPRINT_MIN_SPAN_DAYS
             and self.matched_values >= _FINGERPRINT_MIN_DISTINCT_VALUES
         )
+
+    @property
+    def informative(self) -> bool:
+        return (
+            self.matched_values * 100 >= len(self.matches) * _FINGERPRINT_MIN_DISTINCT_SHARE_PERCENT
+        )
+
+    @property
+    def qualifying(self) -> bool:
+        return not self.conflicts and self.sufficient and self.informative
 
     def as_evidence(self) -> dict[str, object]:
         return {
@@ -172,6 +188,7 @@ class _FingerprintCandidate:
             ],
             "evidence_span_days": self.span_days,
             "distinct_matched_values": self.matched_values,
+            "informative": self.informative,
             "conflict_count": len(self.conflicts),
             "recent_conflicts": [
                 {
@@ -577,7 +594,7 @@ class RtaDistributionImportService:
             "candidate_codes": sorted(candidate_codes),
         }
         if not candidate_codes:
-            conclusion = self._nav_fingerprint_conclusion(source, name_evidence)
+            conclusion = self._nav_fingerprint_conclusion(source, capture.id, name_evidence)
         elif len(candidate_codes) == 1:
             conclusion = _MappingConclusion(
                 status="mapped",
@@ -626,7 +643,10 @@ class RtaDistributionImportService:
         return self._idcw_codes_by_core_plan.get((source_core, source.plan_type), frozenset())
 
     def _nav_fingerprint_conclusion(
-        self, source: RtaSchemeCapture, name_evidence: dict[str, object]
+        self,
+        source: RtaSchemeCapture,
+        capture_id: str,
+        name_evidence: dict[str, object],
     ) -> _MappingConclusion:
         """Identify an option from the RTA's own published NAVs when no name candidate exists.
 
@@ -637,6 +657,7 @@ class RtaDistributionImportService:
         probes = _fingerprint_probes(evidence)
         candidates: tuple[_FingerprintCandidate, ...] = ()
         probe_codes: tuple[str, ...] = ()
+        corroboration: dict[str, object] | None = None
         if (
             len(evidence) < _FINGERPRINT_MIN_MATCHES
             or len(distinct_values) < _FINGERPRINT_MIN_DISTINCT_VALUES
@@ -645,19 +666,33 @@ class RtaDistributionImportService:
         else:
             probe_codes = self._fingerprint_probe_codes(source, probes)
             candidates = self._assess_fingerprint_candidates(probe_codes, evidence)
-            qualifying_count = sum(candidate.qualifying for candidate in candidates)
+            qualifying = [candidate for candidate in candidates if candidate.qualifying]
             if not probe_codes:
                 reason = "no_nav_fingerprint_candidate"
-            elif qualifying_count == 1:
-                reason = "unique_nav_fingerprint"
-            elif qualifying_count > 1:
+            elif len(qualifying) > 1:
                 reason = "multiple_nav_fingerprint_candidates"
+            elif len(qualifying) == 1:
+                corroboration = self._fingerprint_amount_corroboration(
+                    source, capture_id, qualifying[0].amfi_scheme_code
+                )
+                reason = (
+                    "unique_nav_fingerprint"
+                    if corroboration["corroborated"]
+                    else "nav_fingerprint_amount_disagreement"
+                )
             elif any(candidate.conflicts for candidate in candidates):
                 reason = "nav_fingerprint_conflict"
+            elif any(
+                candidate.sufficient and not candidate.informative for candidate in candidates
+            ):
+                reason = "nav_fingerprint_low_information"
             else:
                 reason = "insufficient_nav_fingerprint_matches"
         qualifying_codes = sorted(
             candidate.amfi_scheme_code for candidate in candidates if candidate.qualifying
+        )
+        concluded_codes = (
+            [] if reason == "nav_fingerprint_amount_disagreement" else qualifying_codes
         )
         details = _evidence_json(
             {
@@ -665,17 +700,21 @@ class RtaDistributionImportService:
                 "policy": (
                     "exact normalized scheme core + plan + exact current NAV evidence; "
                     "without a name candidate, a unique plan-compatible AMFI IDCW option "
-                    "matching the RTA's published NAVs"
+                    "matching the RTA's published NAVs and corroborated by declared amounts"
                 ),
-                "candidate_codes": qualifying_codes,
+                "candidate_codes": concluded_codes,
                 "nav_fingerprint": {
                     "policy_version": _FINGERPRINT_POLICY_VERSION,
                     "rule": (
                         f"at least {_FINGERPRINT_MIN_MATCHES} exact NAV date matches spanning "
                         f"{_FINGERPRINT_MIN_SPAN_DAYS} days with at least "
-                        f"{_FINGERPRINT_MIN_DISTINCT_VALUES} distinct matched values; any "
-                        "comparable-date NAV mismatch blocks the candidate; exactly one "
-                        "qualifying option is required"
+                        f"{_FINGERPRINT_MIN_DISTINCT_VALUES} distinct matched values that are "
+                        f"distinct on at least {_FINGERPRINT_MIN_DISTINCT_SHARE_PERCENT}% of "
+                        "matched dates; any comparable-date NAV mismatch blocks the candidate; "
+                        "exactly one qualifying option is required; declared amounts from "
+                        f"{_FINGERPRINT_AMOUNT_COMPARISON_START.isoformat()} may disagree with "
+                        "other sources' latest values on at most "
+                        f"{_FINGERPRINT_MAX_AMOUNT_DISAGREEMENT_PERCENT}% of shared dates"
                     ),
                     "reason": reason,
                     "evidence_dates": len(evidence),
@@ -684,14 +723,82 @@ class RtaDistributionImportService:
                     "probe_candidate_codes": list(probe_codes),
                     "candidates": [candidate.as_evidence() for candidate in candidates],
                     "qualifying_codes": qualifying_codes,
+                    "amount_corroboration": corroboration,
                 },
             }
         )
-        if len(qualifying_codes) == 1:
-            return _MappingConclusion("mapped", qualifying_codes[0], "nav_fingerprint", details)
-        if qualifying_codes:
+        if len(concluded_codes) == 1:
+            return _MappingConclusion("mapped", concluded_codes[0], "nav_fingerprint", details)
+        if concluded_codes:
             return _MappingConclusion("ambiguous", None, "none", details)
         return _MappingConclusion("unresolved", None, "none", details)
+
+    def _fingerprint_amount_corroboration(
+        self, source: RtaSchemeCapture, capture_id: str, amfi_scheme_code: str
+    ) -> dict[str, object]:
+        """Compare declared amounts with the latest value other evidence holds for each date."""
+        source_amounts: dict[date, set[Decimal]] = {}
+        for row in source.rows:
+            if row.record_date >= _FINGERPRINT_AMOUNT_COMPARISON_START:
+                source_amounts.setdefault(row.record_date, set()).add(
+                    row.individual_amount_per_unit_inr
+                )
+        latest_other: dict[date, tuple[int, Decimal]] = {}
+        if source_amounts:
+            own_revision_ids = (
+                select(DistributionEventRevisionRtaSourceRecord.distribution_event_revision_id)
+                .join(
+                    RtaDistributionRecord,
+                    RtaDistributionRecord.id
+                    == DistributionEventRevisionRtaSourceRecord.rta_distribution_record_id,
+                )
+                .where(RtaDistributionRecord.scheme_capture_id == capture_id)
+            )
+            for record_date, revision_number, amount in self._session.execute(
+                select(
+                    DistributionEventRecord.record_date,
+                    DistributionEventRevisionRecord.revision_number,
+                    DistributionEventRevisionRecord.amount_per_unit_inr,
+                )
+                .join(
+                    DistributionEventRevisionRecord,
+                    DistributionEventRevisionRecord.distribution_event_id
+                    == DistributionEventRecord.id,
+                )
+                .where(
+                    DistributionEventRecord.amfi_scheme_code == amfi_scheme_code,
+                    DistributionEventRecord.event_type == _EVENT_TYPE,
+                    DistributionEventRecord.record_date >= _FINGERPRINT_AMOUNT_COMPARISON_START,
+                    DistributionEventRevisionRecord.id.not_in(own_revision_ids),
+                )
+            ).tuples():
+                if record_date not in source_amounts:
+                    continue
+                prior = latest_other.get(record_date)
+                if prior is None or revision_number > prior[0]:
+                    latest_other[record_date] = (revision_number, amount)
+        disagreements = sorted(
+            (record_date, amount)
+            for record_date, (_, amount) in latest_other.items()
+            if amount not in source_amounts[record_date]
+        )
+        compared = len(latest_other)
+        return {
+            "comparison_start": _FINGERPRINT_AMOUNT_COMPARISON_START.isoformat(),
+            "compared_dates": compared,
+            "disagreeing_dates": len(disagreements),
+            "max_disagreement_percent": _FINGERPRINT_MAX_AMOUNT_DISAGREEMENT_PERCENT,
+            "corroborated": len(disagreements) * 100
+            <= compared * _FINGERPRINT_MAX_AMOUNT_DISAGREEMENT_PERCENT,
+            "recent_disagreements": [
+                {
+                    "date": record_date.isoformat(),
+                    "other": str(amount),
+                    "source": sorted(str(item) for item in source_amounts[record_date]),
+                }
+                for record_date, amount in disagreements[-_FINGERPRINT_EVIDENCE_SAMPLE:]
+            ],
+        }
 
     def _fingerprint_probe_codes(
         self,
@@ -1007,6 +1114,12 @@ class RtaDistributionImportService:
                     and self._is_same_rta_source_parser_revision(current, source)
                 )
                 if current_tier <= DistributionSourceTier.RTA and not is_parser_revision:
+                    # A NAV-fingerprint identity is weaker than the evidence behind an existing
+                    # RTA value, so its disagreement blocks the row instead of retiring that value.
+                    retires_peer = (
+                        current_tier == DistributionSourceTier.RTA
+                        and mapping.mapping_method != "nav_fingerprint"
+                    )
                     self._record_issue(
                         source,
                         run,
@@ -1016,9 +1129,11 @@ class RtaDistributionImportService:
                         f"tier={current_tier.name.lower()}, AMFI code={scheme_code}, "
                         f"record_date={source.record_date}, "
                         f"canonical={current.amount_per_unit_inr}, "
-                        f"RTA={source.individual_amount_per_unit_inr}",
+                        f"RTA={source.individual_amount_per_unit_inr}, "
+                        f"identity={mapping.mapping_method}, "
+                        f"existing_value_retired={str(retires_peer).lower()}",
                     )
-                    if current_tier == DistributionSourceTier.RTA:
+                    if retires_peer:
                         current.is_current = False
                         self._session.flush()
                     amount_conflicts += 1

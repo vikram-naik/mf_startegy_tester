@@ -19,7 +19,13 @@ def _run(tmp_path: Path, *, failing_command: str = "") -> tuple[int, list[str], 
     for directory in (scripts, binaries, captures):
         directory.mkdir(parents=True)
     shutil.copy2(SCRIPT, scripts / SCRIPT.name)
-    (captures / "kfintech-full.jsonl").write_text("{}\n")
+    for name in (
+        "kfintech-full.jsonl",
+        "kfintech-full.jsonl.errors.jsonl",
+        "kfintech-full.jsonl.fund-errors.jsonl",
+        "kfintech-refresh-20260905T034702Z.jsonl",
+    ):
+        (captures / name).write_text("{}\n")
     call_log = project / "calls.log"
     _write_executable(
         binaries / "alembic",
@@ -63,20 +69,27 @@ def test_remap_script_runs_offline_steps_in_order_and_records_status(tmp_path: P
         "mfst distribution-payout-gap-report --since 2025-01-01",
         "mfst distribution-identity-backlog-report",
         "mfst resume-rta-distribution-import --capture-file data/rta-captures/kfintech-full.jsonl",
+        "mfst resume-rta-distribution-import --capture-file "
+        "data/rta-captures/kfintech-refresh-20260905T034702Z.jsonl",
+        "mfst reconcile-rta-nav-fingerprint",
         "mfst distribution-identity-backlog-report",
         "mfst assess-distribution-coverage",
         "mfst distribution-payout-gap-report --since 2025-01-01",
     ]
     assert status["exit_status"] == "0"
     assert status["remap_status"] == "0"
-    assert status["capture_files_completed"] == "1"
+    assert status["reconcile_status"] == "0"
+    assert status["capture_files_total"] == "2"
+    assert status["capture_files_completed"] == "2"
 
 
-def test_remap_script_failure_is_nonzero_and_still_writes_reports(tmp_path: Path) -> None:
+def test_remap_failure_skips_reconciliation_but_still_writes_reports(tmp_path: Path) -> None:
     exit_code, calls, status = _run(tmp_path, failing_command="resume-rta-distribution-import")
 
     assert exit_code == 1
     assert calls[-1] == "mfst distribution-payout-gap-report --since 2025-01-01"
+    assert "mfst reconcile-rta-nav-fingerprint" not in calls
     assert status["exit_status"] == "1"
     assert status["remap_status"] == "1"
+    assert status["reconcile_status"] == "not_run"
     assert status["capture_files_completed"] == "0"

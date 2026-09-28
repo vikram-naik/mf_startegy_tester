@@ -22,6 +22,8 @@ _RTA_FINGERPRINT_BACKLOG_REASONS = {
             "insufficient_nav_fingerprint_evidence",
             "no_nav_fingerprint_candidate",
             "nav_fingerprint_conflict",
+            "nav_fingerprint_low_information",
+            "nav_fingerprint_amount_disagreement",
             "insufficient_nav_fingerprint_matches",
         }
     ),

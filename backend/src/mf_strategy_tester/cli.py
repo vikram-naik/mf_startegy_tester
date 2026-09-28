@@ -49,6 +49,9 @@ from mf_strategy_tester.services.official_distribution_notice import (
     HdfcDistributionNoticeService,
 )
 from mf_strategy_tester.services.rta_distribution import RtaDistributionImportService
+from mf_strategy_tester.services.rta_fingerprint_reconciliation import (
+    RtaFingerprintReconciliationService,
+)
 from mf_strategy_tester.services.scheme_lifecycle import SchemeLifecycleSyncService
 from mf_strategy_tester.services.source_ingestion import SourceIngestionService
 
@@ -333,6 +336,18 @@ def build_parser() -> argparse.ArgumentParser:
         "publish-pending-rta-distributions",
         help="Publish captured RTA rows after new manual scheme mappings",
     )
+    fingerprint_reconcile = subcommands.add_parser(
+        "reconcile-rta-nav-fingerprint",
+        help=(
+            "Retire values backed only by withdrawn NAV-fingerprint identities and restore "
+            "values they displaced"
+        ),
+    )
+    fingerprint_reconcile.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report the changes without committing them",
+    )
 
     review_identifier = subcommands.add_parser(
         "review-distribution-identifier",
@@ -479,6 +494,12 @@ def main() -> int:
             elif arguments.command == "publish-pending-rta-distributions":
                 output = asdict(
                     RtaDistributionImportService(session, repository, artifacts).publish_pending()
+                )
+            elif arguments.command == "reconcile-rta-nav-fingerprint":
+                output = asdict(
+                    RtaFingerprintReconciliationService(session).reconcile(
+                        dry_run=arguments.dry_run
+                    )
                 )
             elif arguments.command == "publish-hdfc-distribution-notice":
                 output = asdict(
