@@ -2,76 +2,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, Field
 
 from mf_strategy_tester.db.models import (
     IngestionBatchRecord,
     NavSyncRunRecord,
-    StrategyRecord,
-    StrategyVersionRecord,
 )
-from mf_strategy_tester.domain.strategy import StrategyDefinition
 from mf_strategy_tester.services.nav_performance import (
     DrawdownSummary,
     NavReturn,
     RollingReturnSummary,
 )
-
-
-class StrategyWriteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    definition: StrategyDefinition
-
-
-class StrategyVersionResponse(BaseModel):
-    id: str
-    version: int
-    definition: StrategyDefinition
-    created_at: datetime
-
-    @classmethod
-    def from_record(cls, record: StrategyVersionRecord) -> "StrategyVersionResponse":
-        return cls(
-            id=record.id,
-            version=record.version,
-            definition=StrategyDefinition.model_validate(record.definition),
-            created_at=record.created_at,
-        )
-
-
-class StrategySummaryResponse(BaseModel):
-    id: str
-    name: str
-    description: str
-    latest_version: int
-    created_at: datetime
-    updated_at: datetime
-
-    @classmethod
-    def from_record(cls, record: StrategyRecord) -> "StrategySummaryResponse":
-        return cls(
-            id=record.id,
-            name=record.name,
-            description=record.description,
-            latest_version=max(version.version for version in record.versions),
-            created_at=record.created_at,
-            updated_at=record.updated_at,
-        )
-
-
-class StrategyDetailResponse(StrategySummaryResponse):
-    versions: tuple[StrategyVersionResponse, ...]
-
-    @classmethod
-    def from_record(cls, record: StrategyRecord) -> "StrategyDetailResponse":
-        summary = StrategySummaryResponse.from_record(record)
-        return cls(
-            **summary.model_dump(),
-            versions=tuple(
-                StrategyVersionResponse.from_record(version) for version in record.versions
-            ),
-        )
 
 
 class HealthResponse(BaseModel):
@@ -161,8 +102,262 @@ class FundHouseResponse(BaseModel):
 
 
 class SchemeCategoryResponse(BaseModel):
+    classification_id: str
     classification: str
+    structure_type: Literal["open_ended", "close_ended", "interval", "other"]
     scheme_options: int
+
+
+class ScreenerClassificationResponse(BaseModel):
+    classification_id: str
+    classification: str
+    structure_type: Literal["open_ended", "close_ended", "interval", "other"]
+    product_type: Literal["mutual_fund", "index_fund", "etf", "mixed"]
+    candidate_options: int
+    eligible_options: int
+    excluded_options: int
+    mapping_version: str
+
+
+class ClassificationAliasSourceResponse(BaseModel):
+    classification_id: str
+    amfi_classification: str
+    structure_type: Literal["open_ended", "close_ended", "interval", "other"]
+    raw_labels: tuple[str, ...]
+    alias_id: str | None
+
+
+class ClassificationAliasResponse(BaseModel):
+    id: str
+    name: str
+    structure_type: Literal["open_ended", "close_ended", "interval", "other"]
+    status: Literal["active", "inactive"]
+    version: int
+    classification_ids: tuple[str, ...]
+    updated_at: datetime
+
+
+class ClassificationAliasRevisionResponse(BaseModel):
+    alias_id: str
+    version: int
+    name: str
+    structure_type: Literal["open_ended", "close_ended", "interval", "other"]
+    status: Literal["active", "inactive"]
+    classification_ids: tuple[str, ...]
+    reason: str
+    created_at: datetime
+
+
+class ClassificationAliasManagementResponse(BaseModel):
+    aliases: tuple[ClassificationAliasResponse, ...]
+    source_classifications: tuple[ClassificationAliasSourceResponse, ...]
+    revisions: tuple[ClassificationAliasRevisionResponse, ...]
+
+
+class ClassificationAliasCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    structure_type: Literal["open_ended", "close_ended", "interval", "other"]
+    status: Literal["active", "inactive"] = "active"
+    classification_ids: tuple[str, ...] = Field(max_length=200)
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class ClassificationAliasUpdateRequest(ClassificationAliasCreateRequest):
+    expected_version: int = Field(ge=1)
+
+
+class ScreenerFundResponse(BaseModel):
+    rank: int
+    amfi_scheme_code: str
+    scheme_name: str
+    fund_house_name: str
+    scheme_classification: str
+    plan_type: Literal["direct", "regular"]
+    option_type: Literal["growth", "idcw"]
+    isin: str | None
+    start_date: date
+    end_date: date
+    start_nav: Decimal
+    end_nav: Decimal
+    elapsed_days: int
+    endpoint_staleness_days: int
+    total_return_pct: Decimal
+    annualized_return_pct: Decimal | None
+    payout_amount_per_unit_inr: Decimal | None
+    payout_yield_pct: Decimal | None
+    payout_event_count: int
+    latest_payout_record_date: date | None
+    payout_yield_rank: int | None
+    payout_frequency_rank: int | None
+    idcw_rank_score: Decimal | None
+
+
+class ScreenerExclusionResponse(BaseModel):
+    amfi_scheme_code: str
+    scheme_name: str
+    fund_house_name: str
+    scheme_classification: str
+    plan_type: Literal["direct", "regular"]
+    option_type: Literal["growth", "idcw"]
+    isin: str | None
+    reason: Literal["stale_endpoint", "insufficient_history", "no_payout_events"]
+    reason_detail: str
+    first_nav_date: date
+    latest_nav_date: date | None
+    latest_nav: Decimal | None
+    endpoint_staleness_days: int | None
+
+
+class FundScreenerResponse(BaseModel):
+    classification_id: str
+    classification: str
+    classification_mapping_version: str
+    items: tuple[ScreenerFundResponse, ...]
+    total: int
+    limit: int
+    offset: int
+    as_of_date: date
+    target_start_date: date
+    horizon: Literal["1m", "3m", "6m", "1y", "3y", "5y", "10y"]
+    ranking_metric: Literal[
+        "total_return_pct", "annualized_return_pct", "payout_yield_frequency_score"
+    ]
+    ranking_method: str | None
+    return_basis: Literal["nav_only"]
+    distribution_treatment: Literal["excluded", "record_date_payout_yield"]
+    day_count_convention: Literal["actual/365"]
+    endpoint_tolerance_days: int
+    candidate_options: int
+    excluded_stale_endpoint: int
+    excluded_insufficient_history: int
+    excluded_no_payout_events: int
+    excluded_items: tuple[ScreenerExclusionResponse, ...]
+    exclusion_limit: int
+    exclusion_offset: int
+
+
+class BenchmarkSeriesResponse(BaseModel):
+    instrument_id: str
+    display_name: str
+    benchmark_family: str
+    provider: Literal["nifty_indices"]
+    instrument_type: Literal["price_index", "gross_total_return_index", "net_total_return_index"]
+    return_basis: Literal["price", "gross_total_return", "net_total_return"]
+    observation_count: int
+    first_observation_date: date
+    latest_observation_date: date
+
+
+class BenchmarkPerformanceResponse(BaseModel):
+    instrument_id: str
+    display_name: str
+    benchmark_family: str
+    provider: Literal["nifty_indices"]
+    instrument_type: Literal["price_index", "gross_total_return_index", "net_total_return_index"]
+    return_basis: Literal["price", "gross_total_return", "net_total_return"]
+    status: Literal["available", "stale_endpoint", "insufficient_history"]
+    reason_detail: str | None
+    requested_as_of_date: date
+    target_start_date: date
+    endpoint_tolerance_days: int
+    start_date: date | None
+    end_date: date | None
+    start_value: Decimal | None
+    end_value: Decimal | None
+    elapsed_days: int | None
+    endpoint_staleness_days: int | None
+    total_return_pct: Decimal | None
+    annualized_return_pct: Decimal | None
+    day_count_convention: Literal["actual/365"]
+
+
+class HeatmapTileResponse(BaseModel):
+    tile_id: str
+    label: str
+    status: Literal["available", "stale_endpoint", "insufficient_history"]
+    reason_detail: str | None
+    value_pct: Decimal | None
+    minimum_constituent_pct: Decimal | None
+    maximum_constituent_pct: Decimal | None
+    candidate_count: int
+    constituent_count: int
+    excluded_count: int
+    excluded_stale_endpoint: int
+    excluded_insufficient_history: int
+    sample_count: int
+    return_basis: Literal["nav_only", "price", "gross_total_return", "net_total_return"]
+    structure_type: Literal["open_ended", "close_ended", "interval", "other"] | None
+    product_type: Literal["mutual_fund", "index_fund", "etf", "mixed"] | None
+    classification_mapping_version: str | None
+    period_start_date_min: date | None
+    period_start_date_max: date | None
+    period_end_date_min: date | None
+    period_end_date_max: date | None
+    maximum_endpoint_staleness_days: int | None
+
+
+class HeatmapResponse(BaseModel):
+    universe: Literal["funds", "benchmarks", "indices"]
+    period: Literal[
+        "1m",
+        "3m",
+        "6m",
+        "1y",
+        "3y",
+        "5y",
+        "10y",
+        "rolling_1y",
+        "rolling_3y",
+        "rolling_5y",
+        "rolling_10y",
+    ]
+    mode: Literal["trailing", "rolling"]
+    requested_as_of_date: date
+    target_start_date: date | None
+    endpoint_tolerance_days: int
+    metric: Literal[
+        "median_constituent_return_pct",
+        "series_return_pct",
+        "median_rolling_annualized_return_pct",
+    ]
+    aggregation_method: str
+    observation_frequency: str
+    day_count_convention: Literal["actual/365"]
+    distribution_treatment: str
+    rolling_start_rule: str | None
+    current_universe_limitation: str
+    tiles: tuple[HeatmapTileResponse, ...]
+
+
+class ComparisonNavPointResponse(BaseModel):
+    nav_date: date
+    nav_value: Decimal
+    normalized_value: Decimal
+
+
+class ComparisonDistributionEventResponse(BaseModel):
+    record_date: date
+    amount_per_unit_inr: Decimal
+
+
+class FundComparisonSeriesResponse(BaseModel):
+    amfi_scheme_code: str
+    scheme_name: str
+    fund_house_name: str
+    scheme_classification: str
+    plan_type: str
+    option_type: str
+    points: tuple[ComparisonNavPointResponse, ...]
+    distributions: tuple[ComparisonDistributionEventResponse, ...]
+
+
+class FundComparisonResponse(BaseModel):
+    start_date: date
+    end_date: date
+    normalization_base: Literal["first_observation_100"]
+    return_basis: Literal["nav_only"]
+    distribution_markers: Literal["record_date"]
+    series: tuple[FundComparisonSeriesResponse, ...]
 
 
 class SchemeBrowserItemResponse(BaseModel):

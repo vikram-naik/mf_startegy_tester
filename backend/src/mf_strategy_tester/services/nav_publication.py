@@ -28,6 +28,7 @@ from mf_strategy_tester.ingestion.amfi import (
     NavParsedRecord,
     NavSourceRecord,
 )
+from mf_strategy_tester.services.classification_reference import ClassificationReferenceService
 
 _ISIN_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 
@@ -90,6 +91,9 @@ class NormalizedNavPublisher:
     ) -> NavPublicationStats:
         if not records:
             return NavPublicationStats(0, 0, 0, 0, 0, None)
+        ClassificationReferenceService(self._session).ensure_approved_aliases(
+            record.scheme_classification for record in records
+        )
         new_scheme_options = self._ensure_scheme_options(records, batch_id)
         metadata_ids = self._ensure_metadata_versions(records, batch_id)
         valid_records = tuple(record for record in records if isinstance(record, NavSourceRecord))

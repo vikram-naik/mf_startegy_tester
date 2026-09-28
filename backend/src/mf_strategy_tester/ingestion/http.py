@@ -56,7 +56,7 @@ class SourceDownloader:
                     else "text/plain, application/json;q=0.9, */*;q=0.1"
                 ),
                 "User-Agent": (
-                    "Mozilla/5.0" if is_hdfc_file else "mf-strategy-tester/0.1 (+local-research)"
+                    "Mozilla/5.0" if is_hdfc_file else "mf-fund-screener/0.1 (+local-research)"
                 ),
                 **({"Referer": "https://www.hdfcfund.com/"} if is_hdfc_file else {}),
             },

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  compareFunds,
   getDataCoverage,
   getSchemePerformance,
   listFundHouses,
@@ -10,6 +11,7 @@ import {
   listSchemes,
   type DataCoverage,
   type DistributionEventBrowser,
+  type FundComparison,
   type FundHouse,
   type IngestionBatch,
   type SchemeBrowser,
@@ -19,6 +21,7 @@ import {
 } from "../api/client";
 import { latestRollingReturn, SUMMARY_CAGR_WINDOWS } from "../model/performance";
 import { distributionCoverageMessage } from "../model/distributionCoverage";
+import { NavComparisonChart } from "./NavComparisonChart";
 
 const PAGE_SIZE = 50;
 
@@ -41,6 +44,13 @@ function formatNav(value: string): string {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function fiveYearChartStart(firstDate: string, latestDate: string): string {
+  const latest = new Date(`${latestDate}T00:00:00Z`);
+  latest.setUTCFullYear(latest.getUTCFullYear() - 5);
+  const trailingStart = latest.toISOString().slice(0, 10);
+  return firstDate > trailingStart ? firstDate : trailingStart;
+}
+
 export function DataWorkspace() {
   const [batches, setBatches] = useState<IngestionBatch[]>([]);
   const [coverage, setCoverage] = useState<DataCoverage | null>(null);
@@ -56,6 +66,7 @@ export function DataWorkspace() {
   const [selectedScheme, setSelectedScheme] = useState<SchemeBrowserItem | null>(null);
   const [performance, setPerformance] = useState<SchemePerformance | null>(null);
   const [distributions, setDistributions] = useState<DistributionEventBrowser | null>(null);
+  const [comparison, setComparison] = useState<FundComparison | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [isLoadingSchemes, setIsLoadingSchemes] = useState(false);
@@ -110,7 +121,7 @@ export function DataWorkspace() {
       setBrowserError(null);
       listSchemes({
         fundHouseId: selectedFundHouseId,
-        category,
+        categoryId: category,
         planType,
         optionType,
         search,
@@ -137,6 +148,7 @@ export function DataWorkspace() {
     if (selectedScheme === null) {
       setPerformance(null);
       setDistributions(null);
+      setComparison(null);
       setDetailError(null);
       return;
     }
@@ -145,14 +157,21 @@ export function DataWorkspace() {
     setDetailError(null);
     setPerformance(null);
     setDistributions(null);
+    setComparison(null);
     Promise.all([
       getSchemePerformance(selectedScheme.amfi_scheme_code),
       listSchemeDistributions(selectedScheme.amfi_scheme_code),
+      compareFunds(
+        [selectedScheme.amfi_scheme_code],
+        fiveYearChartStart(selectedScheme.first_nav_date, selectedScheme.latest_nav_date),
+        selectedScheme.latest_nav_date,
+      ),
     ])
-      .then(([loadedPerformance, loadedDistributions]) => {
+      .then(([loadedPerformance, loadedDistributions, loadedComparison]) => {
         if (!current) return;
         setPerformance(loadedPerformance);
         setDistributions(loadedDistributions);
+        setComparison(loadedComparison);
       })
       .catch((reason: unknown) => {
         if (current) setDetailError(errorMessage(reason, "Unable to load scheme analytics."));
@@ -238,7 +257,7 @@ export function DataWorkspace() {
             <select value={category} onChange={(event) => { setCategory(event.target.value); resetPage(); }}>
               <option value="">All classifications</option>
               {categories.map((item) => (
-                <option key={item.classification} value={item.classification}>
+                <option key={item.classification_id} value={item.classification_id}>
                   {item.classification} · {item.scheme_options.toLocaleString()}
                 </option>
               ))}
@@ -356,6 +375,7 @@ export function DataWorkspace() {
               <div className="batch-empty"><strong>Calculating scheme analytics…</strong></div>
             ) : performance ? (
               <>
+                {comparison && <NavComparisonChart comparison={comparison} />}
                 <div className="stat-grid performance-grid">
                   <div><span>Since-inception NAV CAGR</span><strong>{formatPercent(performance.since_inception.annualized_return_pct)}</strong><small>{performance.since_inception.start_date} to {performance.since_inception.end_date}</small></div>
                   {SUMMARY_CAGR_WINDOWS.map((windowYears) => {

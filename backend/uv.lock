@@ -519,7 +519,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mf-strategy-tester"
+name = "mf-fund-screener"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

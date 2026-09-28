@@ -71,7 +71,7 @@ drawdown; IDCW cash payouts remain excluded.
 
 ## Limitations
 
-- Results use the current normalized revision for each NAV date, not a frozen backtest dataset
+- Results use the current normalized revision for each NAV date, not a frozen reproducible dataset
   snapshot.
 - NAV date does not establish when the value became available to an investor. These results are
   descriptive and must not be used as point-in-time signals without an availability convention.
@@ -87,3 +87,6 @@ GET /api/v1/data/schemes/{amfi_scheme_code}/distributions
 
 That endpoint includes immutable revisions and exact AMFI source artifact/parser provenance. It
 does not convert record-date events into payment-date portfolio cash flows.
+
+The separate trailing payout-yield ranking and its NAV-CAGR context are documented in
+[`IDCW_SCREENER.md`](IDCW_SCREENER.md).

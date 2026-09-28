@@ -1,6 +1,6 @@
 # Project handoff
 
-**Snapshot date:** 2026-09-02 (`Asia/Kolkata`)
+**Snapshot date:** 2026-09-04 (`Asia/Kolkata`)
 
 **Authoritative current checkpoint:** [`docs/CURRENT_STATUS.md`](CURRENT_STATUS.md). Read that file
 first after clearing the conversation. The numeric status, pending-batch statements, and next-step
@@ -9,9 +9,20 @@ plan.
 
 **Branch:** `main`
 
-**Version-control state:** Phase 2 was committed as baseline `4fc7302`. Post-baseline lifecycle and
-documentation changes may remain in the working tree; inspect before editing and do not reset,
-clean, or discard them. The ignored local `data/` directory remains valuable research state.
+**Version-control state:** Phase 2 was committed as baseline `4fc7302`, followed by lifecycle
+recovery checkpoint `9b93ed7`. Screener-pivot changes may remain in the working tree; inspect
+before editing and do not reset, clean, or discard them. The ignored local `data/` directory
+remains valuable research state.
+
+The current working tree also contains the additive `20260902_0030` classification reference and
+`20260903_0031` local screener-alias layer. The first retains 222 exact AMFI labels mapped to 103
+stable canonical classifications. The second adds 25 concise, user-manageable aliases over 57 of
+those canonical classifications plus immutable change revisions. Both migrations are applied to
+the retained local database; neither rewrites AMFI metadata. Final post-edit checks for the alias
+management API and UI remain explicitly listed in
+[`docs/CURRENT_STATUS.md`](CURRENT_STATUS.md). See
+[`docs/CLASSIFICATION_REFERENCE.md`](CLASSIFICATION_REFERENCE.md) for mapping behavior; the
+historical limitations below predate that implementation.
 
 ## Historical handoff narrative
 
@@ -21,22 +32,21 @@ it conflicts with `docs/CURRENT_STATUS.md`, the current checkpoint controls.
 ## Product objective
 
 Build a local-first Indian mutual-fund research application where a user can ingest authoritative
-AMFI data, visually define a versioned investment strategy or portfolio, and run reproducible,
-point-in-time backtests without strategy-specific code changes.
+data and screen comparable scheme options across fund houses using explicit, traceable NAV
+performance periods.
 
 Correctness, source provenance, stable identifiers, explicit timing conventions, and auditability
-take precedence over UI convenience. `AGENTS.md` contains the governing engineering and financial
+take precedence over UI convenience. `CLAUDE.md` contains the governing engineering and financial
 rules for subsequent sessions.
 
 ## Current implementation
 
-### Foundation and strategy catalog
+### Foundation and research workspace
 
 - FastAPI backend with typed Pydantic boundaries.
 - SQLite persistence, WAL mode, foreign-key enforcement, and twenty-three Alembic migrations through
   `20260821_0023`.
-- Immutable, versioned declarative strategy definitions.
-- React/TypeScript/Vite strategy-builder shell.
+- React/TypeScript/Vite research-data workspace.
 
 ### AMFI ingestion and normalized NAV data
 
@@ -383,8 +393,8 @@ entries with no upstream schemes, not failed acquisitions.
 
 ## Data-acquisition completion decision
 
-The user explicitly made data acquisition the current gate before Phase 3. Complete and verify the
-IDCW precedence batches, then lifecycle, then benchmarks. AdvisorKhoj may publish canonical
+The user explicitly made data acquisition the current gate before later product work. Complete and
+verify the IDCW precedence batches, then lifecycle, then benchmarks. AdvisorKhoj may publish canonical
 fallback events only through migration `20260821_0019`'s audited AMFI > CAMS/KFintech >
 AdvisorKhoj precedence rule; it must not overwrite higher-priority evidence.
 
@@ -526,8 +536,9 @@ Next session should proceed in this order:
 - The all-family AMFI lifecycle collector is implemented but its long batch is not run. AMFI
   current details do not by themselves establish mergers, closures, predecessor identities, or
   historical eligibility.
-- AMFI classification strings contain historical formatting variants and are retained faithfully;
-  canonical category mapping is not implemented.
+- AMFI classification strings contain historical formatting variants and are retained faithfully.
+  The current working tree implements a separate canonical alias reference; this historical
+  limitation applied before migration `0030`.
 - Canonical IDCW record-date events exist, but payment dates, announcement availability, and
   reinvestment/investor cash flows do not.
 - AMFI distribution coverage is materially incomplete. Under the accepted local-research policy,
@@ -543,16 +554,16 @@ Next session should proceed in this order:
 - Benchmark acquisition is implemented but its research-database history is not acquired. BSE has
   no accepted security-level historical ETF roster; later official mappings are labelled
   provisional, and the smaller official current roster schema raises `partial_bse_roster`.
-- The portfolio accounting engine, backtest orchestration, benchmark-relative metrics, run ledger,
-  and research-result UI are not implemented.
+- The cross-fund-house performance ranking API and customized screener UI were not implemented at
+  this historical checkpoint; both now exist in the current working tree.
 - Local source artifacts and `research.db` are intentionally absent from Git. Back up `data/`
   separately before destructive storage or migration work.
-- The working tree has 109 modified/untracked paths. Do not use destructive Git cleanup commands;
-  review and preserve all existing work.
+- Do not use destructive Git cleanup commands; inspect `git status --short` and preserve all
+  unrelated and ignored local data.
 
 ## Important files
 
-- `AGENTS.md` — mandatory correctness and working rules.
+- `CLAUDE.md` — mandatory correctness and working rules.
 - `docs/CURRENT_STATUS.md` — authoritative conversation-reset checkpoint and current operator plan.
 - `README.md` — local setup and repository overview.
 - `docs/IMPLEMENTATION_PLAN.md` — phase plan and exit criteria.

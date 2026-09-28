@@ -5,6 +5,7 @@ import pytest
 
 from mf_strategy_tester.services.nav_performance import (
     NavPoint,
+    calculate_monthly_rolling_return_summary,
     calculate_nav_performance,
 )
 
@@ -75,6 +76,25 @@ def test_rolling_returns_reject_large_missing_nav_gap() -> None:
     )
 
     assert result.rolling_returns[0].sample_count == 0
+
+
+def test_monthly_rolling_returns_use_only_each_months_last_valid_observation() -> None:
+    points = (
+        NavPoint(date(2020, 1, 1), Decimal("100")),
+        NavPoint(date(2021, 1, 4), Decimal("110")),
+        NavPoint(date(2021, 1, 29), Decimal("120")),
+        NavPoint(date(2021, 2, 1), Decimal("120")),
+        NavPoint(date(2022, 1, 4), Decimal("121")),
+        NavPoint(date(2022, 1, 31), Decimal("132")),
+        NavPoint(date(2022, 2, 1), Decimal("132")),
+    )
+
+    summary = calculate_monthly_rolling_return_summary(points, window_years=1)
+
+    assert summary.sample_count == 2
+    assert summary.latest is not None
+    assert summary.latest.start_date == date(2021, 2, 1)
+    assert summary.latest.end_date == date(2022, 2, 1)
 
 
 def test_maximum_drawdown_retains_peak_and_trough_dates() -> None:

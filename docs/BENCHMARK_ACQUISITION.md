@@ -134,6 +134,16 @@ MFST_ETF_EXCHANGES=NSE,BSE \
 ./scripts/sync_etf_prices.sh
 ```
 
+For routine incremental acquisition of AMFI NAV, all configured Nifty series, and both exchanges'
+ETF prices in one workflow, run:
+
+```bash
+./scripts/sync_all_daily.sh
+```
+
+The daily wrapper uses `refresh` mode only for its bounded correction window; the historical
+wrappers above remain the resumable initial/backfill entrypoints.
+
 Do not background the commands inside the wrapper. If interrupted, rerun the same command in
 `full` mode; committed dates/windows are skipped. An HTTP 404 is retained as an informational
 source failure but is deliberately not checkpointed, because a current-day file may simply not
@@ -175,8 +185,14 @@ backend/.venv/bin/mfst benchmark-report
   market totals; it is not accepted as instrument-level identity evidence.
 - A `completed` request range means every source window/date was handled. It does not prove that
   every benchmark existed for the full requested range.
-- Index price return and total return are not interchangeable. Backtests must select the series
-  economically appropriate to the strategy and disclose the choice.
+- Index price return and total return are not interchangeable. Benchmark-relative screening must
+  select an economically appropriate series and disclose the choice.
+
+The screener exposes acquired Nifty price, GTR, and NTR instruments as explicit standalone
+references. It selects the latest immutable observation revision by retrieval order for each
+endpoint, applies the visible endpoint tolerance, and reports stale or insufficient history rather
+than fabricating a return. It does not calculate fund excess return because fund and reference
+endpoints can differ. Exchange ETF closes remain outside AMFI NAV rankings.
 
 This acceptance condition has been met. Both long runs completed with explicit retained issues;
 the authoritative acceptance artifact is

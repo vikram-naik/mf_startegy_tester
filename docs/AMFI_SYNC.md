@@ -53,7 +53,7 @@ recovery.
 
 ## Daily incremental load
 
-Run the checked-in entrypoint manually:
+For an AMFI-only recovery or diagnostic run, use:
 
 ```bash
 ./scripts/sync_amfi_daily.sh
@@ -67,6 +67,17 @@ there is an explicit operational reason:
 MFST_SYNC_OVERLAP_DAYS=14 ./scripts/sync_amfi_daily.sh
 ```
 
+For the routine scheduler, use the unified daily instrument workflow instead:
+
+```bash
+./scripts/sync_all_daily.sh
+```
+
+It refreshes AMFI catalog/NAV, official Nifty index series, and NSE/BSE ETF prices sequentially
+under the same acquisition lock. `MFST_DAILY_OVERLAP_DAYS` controls the shared correction window;
+`MFST_DAILY_END_DATE` provides an explicit reproducible cutoff. Per-lane JSON reports and the
+aggregate log/status are retained under `data/daily-sync-reports/`.
+
 ### Cron example (03:30 India time)
 
 The host scheduler's timezone must be explicit. On cron implementations supporting `CRON_TZ`, add
@@ -74,7 +85,7 @@ the following with `crontab -e`, replacing the project path if needed:
 
 ```cron
 CRON_TZ=Asia/Kolkata
-30 3 * * * /home/vn/python-projects/mf_startegy_tester/scripts/sync_amfi_daily.sh >> /home/vn/python-projects/mf_startegy_tester/data/amfi-sync.log 2>&1
+30 3 * * * /home/vn/python-projects/mf_startegy_tester/scripts/sync_all_daily.sh
 ```
 
 The entrypoint acquires a non-blocking `flock` on `data/amfi-sync.lock`. A scheduler invocation that

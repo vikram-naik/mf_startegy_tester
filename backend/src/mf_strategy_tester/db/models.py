@@ -71,40 +71,6 @@ class DecimalText(TypeDecorator[Decimal]):
         return None if value is None else Decimal(value)
 
 
-class StrategyRecord(Base):
-    __tablename__ = "strategies"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
-    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime(), nullable=False, default=utc_now, onupdate=utc_now
-    )
-    versions: Mapped[list[StrategyVersionRecord]] = relationship(
-        back_populates="strategy",
-        cascade="save-update, merge",
-        order_by="StrategyVersionRecord.version",
-    )
-
-
-class StrategyVersionRecord(Base):
-    __tablename__ = "strategy_versions"
-    __table_args__ = (
-        CheckConstraint("version > 0", name="ck_strategy_versions_positive_version"),
-        UniqueConstraint("strategy_id", "version", name="uq_strategy_versions_strategy_version"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    strategy_id: Mapped[str] = mapped_column(
-        ForeignKey("strategies.id", ondelete="RESTRICT"), nullable=False, index=True
-    )
-    version: Mapped[int] = mapped_column(Integer, nullable=False)
-    definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
-    strategy: Mapped[StrategyRecord] = relationship(back_populates="versions")
-
-
 class SourceArtifactRecord(Base):
     __tablename__ = "source_artifacts"
     __table_args__ = (
@@ -164,6 +130,120 @@ class AmfiFundRecord(Base):
     )
     first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
     last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+
+class SchemeClassificationRecord(Base):
+    """Canonical research classification; AMFI source text remains in metadata versions."""
+
+    __tablename__ = "scheme_classifications"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_scheme_classification_status"),
+        UniqueConstraint("normalized_key", name="uq_scheme_classification_normalized_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    mapping_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+
+class SchemeClassificationAliasRecord(Base):
+    """Approved mapping from immutable source classification text to a canonical ID."""
+
+    __tablename__ = "scheme_classification_aliases"
+    __table_args__ = (
+        CheckConstraint("source_provider = 'amfi'", name="ck_classification_alias_provider"),
+        CheckConstraint(
+            "match_type IN ('exact', 'formatting', 'terminology', 'manual')",
+            name="ck_classification_alias_match_type",
+        ),
+        Index("ix_classification_alias_canonical", "classification_id"),
+    )
+
+    source_provider: Mapped[str] = mapped_column(String(16), primary_key=True, default="amfi")
+    raw_classification: Mapped[str] = mapped_column(Text, primary_key=True)
+    classification_id: Mapped[str] = mapped_column(
+        ForeignKey("scheme_classifications.id", ondelete="RESTRICT"), nullable=False
+    )
+    match_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    mapping_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_note: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+
+class ScreenerClassificationAliasRecord(Base):
+    """Locally managed, short classification shown by the research UI."""
+
+    __tablename__ = "screener_classification_aliases"
+    __table_args__ = (
+        CheckConstraint(
+            "structure_type IN ('open_ended', 'close_ended', 'interval', 'other')",
+            name="ck_screener_classification_alias_structure",
+        ),
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_screener_alias_status"),
+        CheckConstraint("version > 0", name="ck_screener_alias_positive_version"),
+        UniqueConstraint(
+            "structure_type", "normalized_name", name="uq_screener_alias_structure_name"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    structure_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+
+class ScreenerClassificationAliasMemberRecord(Base):
+    """Map one canonical AMFI classification to at most one screener alias."""
+
+    __tablename__ = "screener_classification_alias_members"
+    __table_args__ = (Index("ix_screener_alias_member_alias", "alias_id"),)
+
+    classification_id: Mapped[str] = mapped_column(
+        ForeignKey("scheme_classifications.id", ondelete="RESTRICT"), primary_key=True
+    )
+    alias_id: Mapped[str] = mapped_column(
+        ForeignKey("screener_classification_aliases.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    added_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
+
+
+class ScreenerClassificationAliasRevisionRecord(Base):
+    """Immutable audit snapshot for a local classification-alias change."""
+
+    __tablename__ = "screener_classification_alias_revisions"
+    __table_args__ = (
+        CheckConstraint("version > 0", name="ck_screener_alias_revision_positive_version"),
+        CheckConstraint(
+            "structure_type IN ('open_ended', 'close_ended', 'interval', 'other')",
+            name="ck_screener_alias_revision_structure",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'inactive')", name="ck_screener_alias_revision_status"
+        ),
+        UniqueConstraint("alias_id", "version", name="uq_screener_alias_revision_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    alias_id: Mapped[str] = mapped_column(
+        ForeignKey("screener_classification_aliases.id", ondelete="RESTRICT"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    structure_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    member_classification_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    change_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=utc_now)
 
 
 class SchemeOptionRecord(Base):

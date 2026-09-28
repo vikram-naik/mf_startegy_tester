@@ -32,6 +32,7 @@ class NavReturn:
 class RollingReturnSummary:
     window_years: int
     sample_count: int
+    first: NavReturn | None
     latest: NavReturn | None
     minimum_annualized_return_pct: Decimal | None
     median_annualized_return_pct: Decimal | None
@@ -74,6 +75,31 @@ def calculate_nav_performance(
     )
 
 
+def calculate_rolling_return_summary(
+    points: tuple[NavPoint, ...], *, window_years: int
+) -> RollingReturnSummary:
+    """Summarize daily-observation rolling returns for one explicit calendar window."""
+
+    _validate_points(points)
+    return _rolling_summary(points, window_years)
+
+
+def calculate_monthly_rolling_return_summary(
+    points: tuple[NavPoint, ...], *, window_years: int
+) -> RollingReturnSummary:
+    """Summarize rolling returns at each calendar month's last valid observation."""
+
+    _validate_points(points)
+    month_end_indices: dict[tuple[int, int], int] = {}
+    for index, point in enumerate(points):
+        month_end_indices[(point.nav_date.year, point.nav_date.month)] = index
+    return _rolling_summary(
+        points,
+        window_years,
+        end_indices=tuple(month_end_indices.values()),
+    )
+
+
 def _validate_points(points: tuple[NavPoint, ...]) -> None:
     if not points:
         raise ValueError("NAV performance requires at least one valid observation")
@@ -108,12 +134,18 @@ def _nav_return(start: NavPoint, end: NavPoint) -> NavReturn:
     )
 
 
-def _rolling_summary(points: tuple[NavPoint, ...], window_years: int) -> RollingReturnSummary:
+def _rolling_summary(
+    points: tuple[NavPoint, ...],
+    window_years: int,
+    *,
+    end_indices: tuple[int, ...] | None = None,
+) -> RollingReturnSummary:
     if window_years <= 0:
         raise ValueError("rolling window years must be positive")
     dates = tuple(point.nav_date for point in points)
     samples: list[NavReturn] = []
-    for end_index, end in enumerate(points):
+    for end_index in end_indices if end_indices is not None else range(len(points)):
+        end = points[end_index]
         target = _anniversary(end.nav_date, window_years)
         start_index = bisect_left(dates, target, 0, end_index)
         if start_index >= end_index:
@@ -132,6 +164,7 @@ def _rolling_summary(points: tuple[NavPoint, ...], window_years: int) -> Rolling
         return RollingReturnSummary(
             window_years=window_years,
             sample_count=0,
+            first=None,
             latest=None,
             minimum_annualized_return_pct=None,
             median_annualized_return_pct=None,
@@ -143,6 +176,7 @@ def _rolling_summary(points: tuple[NavPoint, ...], window_years: int) -> Rolling
     return RollingReturnSummary(
         window_years=window_years,
         sample_count=len(annualized_values),
+        first=samples[0],
         latest=samples[-1],
         minimum_annualized_return_pct=ordered[0],
         median_annualized_return_pct=_median(ordered),

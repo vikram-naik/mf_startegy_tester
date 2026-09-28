@@ -165,16 +165,16 @@ unverified-empty. The later combined assessment is recorded in `docs/DISTRIBUTIO
 ## Acquisition exit and remaining limitations
 
 The finite AdvisorKhoj catalog is fully captured and queryable, so this work is no longer a blocker
-for core research/backtest development. The 423 nonempty ambiguous/unresolved captures are an
+for core screener and research development. The 423 nonempty ambiguous/unresolved captures are an
 explicit identity-review backlog, not silently discarded data.
 
 - The source catalog is a current public inventory, not a survivorship-free historical universe.
 - Mapping uses current valid AMFI NAV revisions; immutable source evidence is retained, but a formal
-  AMFI NAV snapshot identifier is still required before use in a reproducible backtest.
+  AMFI NAV snapshot identifier is still required before a ranking can be reproduced exactly.
 - Tertiary amounts may be used only through the audited fallback publication links after the
   AMFI/CAMS/KFintech precedence checks; raw AdvisorKhoj observations are not cash flows by
   themselves.
 - Future refreshes must be immutable snapshots so upstream additions and corrections remain
   detectable.
-- Backtests should normally use Growth NAV for total-return research. Modeling IDCW requires an
-  explicit, trust-aware cash-flow policy that prevents distribution double counting.
+- NAV-only rankings should use Growth options. IDCW comparisons require a separately validated
+  total-return convention that prevents distribution double counting.

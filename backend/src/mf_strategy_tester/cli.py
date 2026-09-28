@@ -27,6 +27,7 @@ from mf_strategy_tester.services.advisorkhoj_distribution import (
     AdvisorkhojDistributionPilotService,
 )
 from mf_strategy_tester.services.benchmark_acquisition import BenchmarkAcquisitionService
+from mf_strategy_tester.services.classification_reference import ClassificationReferenceService
 from mf_strategy_tester.services.data_quality import DataQualityReportService
 from mf_strategy_tester.services.distribution_coverage import (
     DistributionCoverageAssessmentService,
@@ -52,7 +53,7 @@ from mf_strategy_tester.services.source_ingestion import SourceIngestionService
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="mfst", description="MF Strategy Tester operations")
+    parser = argparse.ArgumentParser(prog="mfst", description="MF Fund Screener operations")
     subcommands = parser.add_subparsers(dest="command", required=True)
     ingest = subcommands.add_parser("ingest", help="Capture and validate an official source")
     sources = ingest.add_subparsers(dest="source", required=True)
@@ -191,6 +192,16 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser(
         "data-quality-report",
         help="Report consolidated NAV issues and unresolved distribution identifiers",
+    )
+    classification_report = subcommands.add_parser(
+        "classification-reference-report",
+        help="Report approved AMFI classification aliases and similarity review proposals",
+    )
+    classification_report.add_argument(
+        "--proposal-threshold",
+        type=float,
+        default=0.82,
+        help="Minimum lexical or token similarity for non-mutating proposals (default: 0.82)",
     )
 
     reconcile = subcommands.add_parser(
@@ -391,6 +402,12 @@ def main() -> int:
                 )
             elif arguments.command == "data-quality-report":
                 output = asdict(DataQualityReportService(session).build_report())
+            elif arguments.command == "classification-reference-report":
+                output = asdict(
+                    ClassificationReferenceService(session).build_report(
+                        proposal_threshold=arguments.proposal_threshold
+                    )
+                )
             elif arguments.command == "acquire-advisorkhoj-distributions":
                 output = asdict(
                     AdvisorkhojDistributionPilotService(

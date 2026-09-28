@@ -3,9 +3,9 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mf-strategy-tester"
+name = "mf-fund-screener"
 version = "0.1.0"
-description = "Local-first mutual-fund research and backtesting API"
+description = "Local-first mutual-fund screening and research API"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14,<2",

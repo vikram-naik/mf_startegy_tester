@@ -5,10 +5,13 @@ import pytest
 
 from mf_strategy_tester.services.idcw_income_research import (
     DistributionPoint,
+    IDCWPayoutRankCandidate,
     annual_yield_cutoffs,
     assess_payout_frequency,
+    calculate_payout_yield,
     calculate_trailing_payout_yield,
     frequency_period_start,
+    rank_idcw_payouts,
 )
 from mf_strategy_tester.services.nav_performance import NavPoint
 
@@ -117,6 +120,51 @@ def test_trailing_yield_is_unavailable_when_nav_is_stale() -> None:
         window_end=date(2026, 8, 30),
     )
     assert result.yield_pct is None
+
+
+def test_payout_yield_uses_endpoint_nav_without_float_conversion() -> None:
+    assert calculate_payout_yield(
+        payout_amount_per_unit_inr=Decimal("7.5"), nav_value=Decimal("125")
+    ) == Decimal("6.00")
+
+    with pytest.raises(ValueError, match="must not be negative"):
+        calculate_payout_yield(
+            payout_amount_per_unit_inr=Decimal("-0.01"), nav_value=Decimal("125")
+        )
+
+
+def test_idcw_rank_equally_weights_yield_and_payout_frequency_percentiles() -> None:
+    result = rank_idcw_payouts(
+        (
+            IDCWPayoutRankCandidate("high-yield-rare", Decimal("8"), 1),
+            IDCWPayoutRankCandidate("balanced", Decimal("7"), 12),
+            IDCWPayoutRankCandidate("low-yield-quarterly", Decimal("4"), 4),
+        )
+    )
+
+    assert [item.scheme_code for item in result] == [
+        "balanced",
+        "high-yield-rare",
+        "low-yield-quarterly",
+    ]
+    assert result[0].payout_yield_rank == 2
+    assert result[0].payout_frequency_rank == 1
+    assert result[0].combined_score == Decimal("75")
+    assert result[1].combined_score == Decimal("50")
+
+
+def test_idcw_rank_preserves_component_ties_and_stable_scheme_code_order() -> None:
+    result = rank_idcw_payouts(
+        (
+            IDCWPayoutRankCandidate("200", Decimal("6"), 4),
+            IDCWPayoutRankCandidate("100", Decimal("6"), 4),
+        )
+    )
+
+    assert [item.scheme_code for item in result] == ["100", "200"]
+    assert all(item.payout_yield_rank == 1 for item in result)
+    assert all(item.payout_frequency_rank == 1 for item in result)
+    assert all(item.combined_score == Decimal("100") for item in result)
 
 
 def test_cutoffs_and_frequency_start_are_calendar_stable() -> None:

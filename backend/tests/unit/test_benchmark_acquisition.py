@@ -158,8 +158,9 @@ def _nse_master(
     isin: str = "INF204KB14I2",
 ) -> bytes:
     return (
-        b"Symbol,Underlying,SecurityName,DateofListing,MarketLot,ISINNumber,FaceValue\n"
-        + f"{symbol},Nifty 50,{security_name},08-Jan-02,1,{isin},1\n".encode()
+        b"Symbol,Underlying Asset,SecurityName,DateofListing,MarketLot,ISINNumber,"
+        b"FaceValue,ETF Underlying,Underlying Key\n"
+        + f"{symbol},Nifty 50,{security_name},08-Jan-02,1,{isin},1,EQUITY,Nifty 50\n".encode()
     )
 
 
@@ -389,7 +390,9 @@ def test_official_parsers_accept_exact_source_shapes_and_reject_drift() -> None:
     assert NiftyIndexMappingParser().parse(_nifty_mapping())[0].display_name == "Nifty 50"
     assert NiftyPriceParser().parse(_nifty_price())[0].close_value.as_tuple().exponent == -2
     assert NiftyTotalReturnParser().parse(_nifty_total_return())[0].net_total_return is not None
-    assert NseEtfMasterParser().parse(_nse_master())[0].isin == "INF204KB14I2"
+    nse_master = NseEtfMasterParser().parse(_nse_master())[0]
+    assert nse_master.isin == "INF204KB14I2"
+    assert nse_master.underlying == "Nifty 50"
     assert BseEtfMarketParser().parse(_bse_market(observation_date))[0].security_id == "500101"
     categorized = BseEtfMarketParser().parse(_bse_categorized_market(observation_date))[0]
     assert categorized.roster_variant == "categorized_subset"
@@ -415,6 +418,10 @@ def test_official_parsers_accept_exact_source_shapes_and_reject_drift() -> None:
     malformed = json.dumps([{"INDEX_NAME": "Nifty 50"}]).encode()
     with pytest.raises(SourceParseError, match="unexpected fields"):
         NiftyPriceParser().parse(malformed)
+
+    obsolete_nse_master = _nse_master().replace(b"Underlying Asset", b"Underlying", 1)
+    with pytest.raises(SourceParseError, match="NSE ETF master expected fields"):
+        NseEtfMasterParser().parse(obsolete_nse_master)
 
 
 def test_legacy_nse_parser_normalizes_only_observed_dummy_isin_marker() -> None:

@@ -1,12 +1,12 @@
-# MF Strategy Tester
+# MF Fund Screener
 
-A local-first research application for ingesting Indian mutual-fund data, defining investment strategies visually, and running reproducible point-in-time backtests.
+A local-first research application for ingesting Indian mutual-fund data and screening comparable
+scheme options across fund houses using explicit, traceable NAV performance periods.
 
 The bootstrap currently provides:
 
 - a typed FastAPI backend;
 - SQLite persistence through SQLAlchemy and Alembic migrations;
-- immutable, versioned declarative strategy definitions;
 - immutable, content-addressed AMFI source capture and audited ingestion batches;
 - resumable AMFI historical NAV synchronization with immutable normalized revisions;
 - resumable AMFI distribution snapshot ingestion with queryable source rows and provenance;
@@ -15,34 +15,50 @@ The bootstrap currently provides:
 - strict current/historical NAV, scheme-list, scheme-details, and distribution parsers;
 - resumable AMFI scheme-family lifecycle/launch acquisition;
 - official Nifty price/TRI/NTR and NSE/BSE ETF price acquisition with immutable revisions;
-- a React/TypeScript strategy-builder shell;
+- a React/TypeScript research workspace;
+- a cross-fund-house Growth-option screener with immutable AMFI classification text, audited local
+  classification aliases, eligibility-aware scheme-structure filtering, and 1-month through
+  10-year trailing NAV periods;
+- a dedicated fund, Nifty benchmark, and Nifty price-index heatmap with trailing and rolling period
+  radio controls, explicit return bases, constituent evidence, and data-quality exclusions;
+- a trailing-12-month IDCW payout-yield screener and heatmap with an explicit equal-weight
+  yield/frequency preference score and separate NAV CAGR context;
+- a classification-alias management screen for concise labels and reviewed predecessor/successor
+  groupings without rewriting AMFI data;
+- normalized multi-fund NAV comparison charts with canonical IDCW record-date annotations;
 - a scheme-option research view with NAV-only since-inception, rolling-return, drawdown, and
   canonical IDCW provenance drill-down;
 - deterministic unit and API tests;
 - explicit architecture and phased delivery documentation.
 
-It publishes provenance-linked AMFI NAV history but does **not** yet execute financial backtests.
-The remaining capabilities are sequenced in [the implementation plan](docs/IMPLEMENTATION_PLAN.md).
+The first cross-fund-house screener release is implemented. Richer risk/consistency metrics,
+reproducible export, and benchmark-relative analysis remain sequenced in
+[the implementation plan](docs/IMPLEMENTATION_PLAN.md).
+Classification identity and similarity-review rules are documented in
+[the classification reference](docs/CLASSIFICATION_REFERENCE.md).
 For the authoritative local dataset checkpoint and clean-conversation restart instructions, read
 [current project status](docs/CURRENT_STATUS.md) before using older handoff numbers.
 
 ## Architecture
 
 ```text
-AMFI artifacts (immutable)       Strategy builder (React)
-            |                              |
-            v                              v
-ingestion -> normalization -> research API / strategy versions
-                         |                 |
-                         +--------+--------+
-                                  v
-                    point-in-time backtest engine
-                                  |
-                                  v
-                   auditable runs, ledgers, metrics
+Official sources
+      |
+      v
+immutable capture -> normalization + validation -> research database
+                                                       |
+                                      +----------------+----------------+
+                                      |                                 |
+                                      v                                 v
+                              screener/ranking API              evidence drill-down API
+                                      |                                 |
+                                      +----------------+----------------+
+                                                       v
+                                              React research UI
 ```
 
-Canonical financial logic belongs in the backend domain/backtest layers. The web application only constructs validated strategy documents and presents results.
+Canonical ranking calculations belong in the backend service layer. The web application supplies
+validated filters and displays results, assumptions, exclusions, and provenance.
 
 ## Prerequisites
 
@@ -55,20 +71,31 @@ Canonical financial logic belongs in the backend domain/backtest layers. The web
 
 ```bash
 uv sync --project backend --extra dev
+npm --prefix web install
+./scripts/start_app.sh
+```
+
+The launcher applies pending migrations, starts both development servers, and stops both when you
+press Ctrl+C or either process exits. To start the processes manually in separate terminals:
+
+```bash
 uv run --project backend alembic -c backend/alembic.ini upgrade head
 uv run --project backend uvicorn mf_strategy_tester.api.main:app --reload
 ```
 
-In a second terminal:
-
 ```bash
-npm --prefix web install
 npm --prefix web run dev
 ```
 
 The API binds to `127.0.0.1:8000` by default. The UI is available at `127.0.0.1:5173`.
-Open the Data view and select a scheme name to inspect its performance. Calculation conventions and
-IDCW limitations are documented in [NAV-only scheme performance](docs/NAV_PERFORMANCE.md).
+The screener is the landing page. The **Heatmaps** tab shows classification-level fund momentum,
+classification-specific IDCW payout yields, and separate official Nifty TRI/NTR and price-index
+views; its financial conventions are documented in [fund and market heatmaps](docs/HEATMAPS.md).
+The **Aliases** tab manages the local, versioned mapping from concise screener labels to retained
+AMFI classifications. The **Data** tab contains ingestion status, scheme browsing, rolling returns,
+drawdown, and IDCW evidence. Calculation conventions and IDCW limitations are documented in
+[NAV-only scheme performance](docs/NAV_PERFORMANCE.md) and
+[the IDCW screener methodology](docs/IDCW_SCREENER.md).
 
 ## Capture official AMFI sources
 
@@ -97,17 +124,19 @@ Resume the complete historical load from the console with:
 ./scripts/sync_amfi_full.sh
 ```
 
-### Routine NAV and payout refresh
+### Routine instrument and payout refresh
 
-Run the NAV synchronization daily:
+Run the unified instrument synchronization daily:
 
 ```bash
-./scripts/sync_amfi_daily.sh
+./scripts/sync_all_daily.sh
 ```
 
-This refreshes the AMFI fund catalog, re-reads the previous seven days of NAV history to capture
-source corrections, and publishes the current AMFI bulk NAV feed. It does **not** acquire IDCW
-payouts.
+This runs one locked, sequential workflow for the AMFI fund catalog and NAV, official Nifty
+price/GTR/NTR series, and official NSE/BSE ETF prices. It re-reads a shared seven-day window to
+capture source corrections, retains separate JSON results for every lane, and writes an aggregate
+log and machine-readable status under `data/daily-sync-reports/`. It does **not** acquire IDCW
+payouts or lifecycle documents.
 
 Run the complete payout synchronization weekly:
 
@@ -121,7 +150,7 @@ reports and checkpoints, and finishes with a combined option-level coverage asse
 AdvisorKhoj workflow captures a new catalog and distribution snapshot on every run. This is a long
 network acquisition and can run for hours.
 
-The daily NAV script and each underlying distribution source script use the same non-blocking
+The unified daily script and each underlying distribution source script use the same non-blocking
 `data/amfi-sync.lock`. They must not overlap. The complete refresh wrapper also uses
 `data/distribution-refresh.lock` to prevent two weekly workflows from running concurrently. A lock
 conflict exits with status 75 rather than allowing concurrent database writers.
@@ -131,7 +160,7 @@ at 03:30 and payout acquisition every Sunday at 04:30, both in `Asia/Kolkata`:
 
 ```cron
 CRON_TZ=Asia/Kolkata
-30 3 * * * /home/vn/python-projects/mf_startegy_tester/scripts/sync_amfi_daily.sh >> /home/vn/python-projects/mf_startegy_tester/data/amfi-nav-daily.log 2>&1
+30 3 * * * /home/vn/python-projects/mf_startegy_tester/scripts/sync_all_daily.sh
 30 4 * * 0 /home/vn/python-projects/mf_startegy_tester/scripts/sync_distributions_refresh.sh >> /home/vn/python-projects/mf_startegy_tester/data/distribution-refresh-weekly.log 2>&1
 ```
 
@@ -259,7 +288,7 @@ npm --prefix web run check
 ## Repository layout
 
 ```text
-backend/  Python API, domain model, persistence, migrations, tests
-web/      React strategy-builder UI and tests
-docs/     architecture decisions and phased product plan
+backend/  Python ingestion, screening API, persistence, migrations, and tests
+web/      React mutual-fund research and screener UI
+docs/     source, calculation, architecture, status, and product-plan documentation
 ```

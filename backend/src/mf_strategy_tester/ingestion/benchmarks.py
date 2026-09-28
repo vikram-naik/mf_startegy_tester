@@ -24,7 +24,7 @@ from mf_strategy_tester.ingestion.errors import (
 )
 from mf_strategy_tester.ingestion.http import DownloadedSource
 
-BENCHMARK_PARSER_VERSION = "official-benchmarks-2026.08.27-r13"
+BENCHMARK_PARSER_VERSION = "official-benchmarks-2026.09.19-r14"
 NIFTY_MAPPING_URL = "https://liveindexsa.niftyindices.com/assets/json/IndexMapping.json"
 NIFTY_PRICE_URL = "https://www.niftyindices.com/BackPage/getHistoricaldatatabletoString"
 NIFTY_TOTAL_RETURN_URL = "https://www.niftyindices.com/BackPage/getTotalReturnIndexString"
@@ -159,6 +159,7 @@ class OfficialBenchmarkDownloader:
         self._sleep = sleep_function
         self._opener = build_opener(HTTPCookieProcessor(CookieJar()))
         self._nse_session_initialized = False
+        self._bse_session_initialized = False
 
     def download(self, source: BenchmarkRequest) -> DownloadedSource:
         self._validate_url(source.url)
@@ -169,6 +170,8 @@ class OfficialBenchmarkDownloader:
         parsed = urlparse(source.url)
         if parsed.hostname == "www.nseindia.com":
             self._initialize_nse_session()
+        if parsed.hostname == "api.bseindia.com":
+            self._initialize_bse_session(source.referer or "https://www.bseindia.com/")
         headers = self._browser_headers(source.referer)
         if source.origin is not None:
             headers = {
@@ -176,6 +179,9 @@ class OfficialBenchmarkDownloader:
                 "Accept-Language": headers["Accept-Language"],
                 "Origin": source.origin,
                 "Referer": source.referer or source.origin,
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-site",
                 "User-Agent": headers["User-Agent"],
             }
         if source.body is not None:
@@ -225,6 +231,24 @@ class OfficialBenchmarkDownloader:
                 f"failed to establish browser-like NSE session: {error}"
             ) from error
         self._nse_session_initialized = True
+
+    def _initialize_bse_session(self, referer: str) -> None:
+        if self._bse_session_initialized:
+            return
+        self._validate_url(referer)
+        request = Request(
+            referer,
+            headers=self._browser_headers(None),
+            method="GET",
+        )
+        try:
+            with self._opener.open(request, timeout=self._timeout_seconds) as response:
+                response.read(min(self._max_bytes, 1_000_000) + 1)
+        except (HTTPError, TimeoutError, URLError) as error:
+            raise SourceDownloadError(
+                f"failed to establish browser-like BSE session: {error}"
+            ) from error
+        self._bse_session_initialized = True
 
     @staticmethod
     def _browser_headers(referer: str | None) -> dict[str, str]:
@@ -389,12 +413,14 @@ class NseEtfMasterParser:
     version = BENCHMARK_PARSER_VERSION
     _fields: ClassVar[list[str]] = [
         "Symbol",
-        "Underlying",
+        "Underlying Asset",
         "SecurityName",
         "DateofListing",
         "MarketLot",
         "ISINNumber",
         "FaceValue",
+        "ETF Underlying",
+        "Underlying Key",
     ]
 
     def parse(self, content: bytes) -> list[EtfMasterRow]:
@@ -416,7 +442,7 @@ class NseEtfMasterParser:
             rows.append(
                 EtfMasterRow(
                     symbol=_required_text(raw["Symbol"], "Symbol", number),
-                    underlying=_required_text(raw["Underlying"], "Underlying", number),
+                    underlying=_required_text(raw["Underlying Asset"], "Underlying Asset", number),
                     security_name=_required_text(raw["SecurityName"], "SecurityName", number),
                     listing_date=_date(raw["DateofListing"], "%d-%b-%y", number),
                     market_lot=market_lot,

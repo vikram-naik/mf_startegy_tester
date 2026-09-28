@@ -1,11 +1,11 @@
 # Current project status
 
-**Authoritative conversation-reset checkpoint:** 2026-09-02 (`Asia/Kolkata`)
+**Authoritative conversation-reset checkpoint:** 2026-09-04 (`Asia/Kolkata`)
 **Branch:** `main`
-**Repository migration head:** `20260902_0028`
-**Local dataset migration applied:** `20260902_0028`
+**Repository migration head:** `20260904_0032`
+**Local dataset migration applied:** `20260904_0032`
 
-Read `AGENTS.md` before changing code. This file supersedes older numeric status and next-step
+Read `CLAUDE.md` before changing code. This file supersedes older numeric status and next-step
 statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronological audit log.
 
 ## Operator decisions that must be preserved
@@ -21,9 +21,12 @@ statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronolog
 - Every long-running acquisition, synchronization, backfill, build, or analysis must be provided as
   a resumable script for the user to run in a separate console. It must retain timestamped logs,
   progress/checkpoints, and a final status/report for later inspection. The agent may run bounded
-  tests and read-only diagnostics only. See `AGENTS.md` section 39.
-- Phase 2 was committed as baseline `4fc7302`. The ignored `data/` directory is about 40 GB and
-  remains valuable local research data; do not reset, clean, or delete it.
+  tests and read-only diagnostics only. See `CLAUDE.md` section 39.
+- Phase 2 was committed as baseline `4fc7302`; lifecycle recovery and aligned documentation were
+  committed as `9b93ed7`. The ignored `data/` directory is about 40 GB and remains valuable local
+  research data; do not reset, clean, or delete it.
+- The product direction is now a customized cross-fund-house performance screener. Strategy
+  construction, portfolio accounting, and backtesting are out of scope.
 
 ## Completion decision
 
@@ -47,7 +50,7 @@ There are no ingestion batches currently marked `running`.
 | Valid current NAV revisions | 33,690,415 |
 | Error/quarantined current NAV revisions | 343,296 |
 | Valid NAV date range | 2006-04-01 through 2026-09-01 |
-| Locally applied Alembic revision | `20260902_0028` |
+| Locally applied Alembic revision | `20260904_0032` |
 
 Incremental NAV run `776d0e37-698c-4c87-b766-c7188d137c10` completed all 57 fund houses on
 2 September through the requested cutoff of 2 September. It received 55,559 rows, inserted 8,204,
@@ -207,38 +210,86 @@ is largely provisional, the official BSE roster is partial, some identities rema
 and invalid/empty exchange rows are quarantined or recorded. Do not treat price, GTR, and NTR as
 interchangeable benchmark series.
 
-## Work remaining after acquisition
+## Current screener implementation and next work
 
-The next work is data-quality and identity resolution, followed by the reproducible dataset
-snapshot and Phase 3 accounting/backtesting—not another blind acquisition pass.
+The application is now a mutual-fund screener, not a strategy builder or backtester. The working
+change removes the empty saved-strategy subsystem. Migrations `20260902_0030` through
+`20260904_0032` are applied locally. No saved strategy record was deleted and no AMFI source
+classification was rewritten.
 
-1. Resolve high-value RTA and AdvisorKhoj identities only where stable AMFI codes, ISINs, official
-   predecessor/merger evidence, or the existing exact evidence gates support the mapping. Use
-   `mfst distribution-identity-backlog-report` to rank later official-evidence work; do not weaken
-   the current gates merely to reduce the backlog.
-2. Retain the audited 67 blocked IDCW options unless new official evidence resolves their
-   percentage, Bonus/Dividend, or non-positive semantics; use
-   `mfst distribution-blocker-report` after later coverage snapshots to detect changes.
-3. Pursue separate official merger/closure/predecessor artifacts without name-based mapping; the
-   null-launch recovery and checkpoint-name alignment are complete.
-4. Reduce benchmark identity uncertainty, especially provisional historical BSE observations,
-   without applying current roster identity retrospectively.
-5. Define an immutable dataset-snapshot manifest tying NAV, IDCW, lifecycle, benchmark, parser, and
-   code versions together.
-6. Then implement Phase 3 deterministic portfolio accounting and backtests, beginning with Growth
-   NAV and preventing IDCW or expense double counting.
+The first screener release is implemented in the working tree:
 
-The identity backlog is now ranked and fully explained by the retained evidence; it has no safe
-local-only mapping candidate. No lifecycle operator action remains. The next engineering task is
-explicit official predecessor/merger evidence or, if none is available for a selected high-value
-identity, item 5's immutable dataset-snapshot manifest. Revisit item 1 only when a stable identifier
-or separate official continuity artifact is available.
+- the classification response and home-screen facets distinguish ordinary mutual funds, index
+  funds, ETFs, and user-created aliases that mix those product types; ETF and index-fund rows
+  remain AMFI Growth-option NAV comparisons rather than exchange-price comparisons;
+- the screener can select a locally acquired official Nifty price, gross total-return, or net
+  total-return series as an explicit standalone reference, showing actual endpoints, return basis,
+  staleness, and unavailable reasons without changing fund rank;
+- the home page ranks Growth options within one selected local alias across all or one fund house,
+  keeping Direct and Regular plans separate;
+- migration `0030` retains 222 historical AMFI labels as approved aliases to 103 stable canonical
+  classifications; the source reference contains 93 Direct Growth canonical IDs while preserving
+  every source string in immutable metadata;
+- migration `0031` adds 25 local screener aliases over 57 canonical classifications, with an
+  immutable initial revision for each alias; the 103 canonical classifications and 222 retained
+  AMFI labels are unchanged;
+- migration `0032` preserves all reviewed and user-created mappings and adds singleton aliases for
+  every remaining active canonical classification, so the screener dropdown and **Aliases** screen
+  use one consistent alias vocabulary;
+- the screener classification selector is faceted by backend-derived scheme structure and omits
+  classifications without an eligible option for the current plan, horizon, endpoint tolerance,
+  and optional fund-house filter; for Direct Growth over one year as of 2 September 2026 it returns
+  54 concise choices instead of 77 semantically split canonical choices;
+- 1-month, 3-month, 6-month, 1-year, 3-year, 5-year, and 10-year periods use exact displayed NAV
+  endpoints, a seven-calendar-day tolerance, absolute return below one year, and actual/365 CAGR
+  from one year onward;
+- up to five funds from the same resolved local alias group can be compared on normalized-to-100
+  or raw NAV charts;
+- canonical IDCW cash payouts are marked at record date and are not added to NAV-only returns;
+- aggregate exclusion counts expand into a paginated evidence table identifying each excluded
+  option, reason, first/latest NAV dates, latest NAV value, and endpoint staleness;
+- the top-level **Aliases** screen creates and edits concise names and mappings, requires a change
+  reason, preserves immutable revisions, and rejects stale concurrent edits; and
+- acquisition coverage, ingestion details, scheme evidence, rolling returns, and drawdown are under
+  the top-level **Data** navigation item.
+
+The next implementation sequence is:
+
+1. Rerun the six data-API integration tests in an environment where Starlette/AnyIO worker threads
+   are permitted; the remaining post-edit checks and production-diff review are complete as listed
+   in **Verification state** below.
+2. Add independently verified maximum-drawdown, volatility, and rolling-return consistency columns
+   without changing the initial return-ranking semantics.
+3. Add URL-backed screener filter state, sortable columns, and frontend interaction coverage.
+4. Add per-fund benchmark-relative metrics only after implementing exact common-date alignment;
+   the standalone reference deliberately does not present unmatched-endpoint excess return.
+5. Add dataset-snapshot export only after the primary trailing-
+   return ranking is independently verified and measured.
+
+Existing IDCW identity blockers, broader lifecycle evidence, and provisional benchmark identities
+remain explicit research-data limitations. They are not blockers for the initial Direct Growth
+NAV-only screener and must not be “resolved” heuristically.
+
+Alias-management closure state:
+
+- an active alias must retain at least one member; audited deactivation releases every member for
+  reassignment and records an immutable empty-member revision without changing AMFI source text;
+- `classification_mapping_version` is rendered in the visible screener methodology note; and
+- the remaining verification limitation is the six-test data-API integration file described below.
 
 ## Application startup
 
-From the repository root, use separate terminals:
+From the repository root, start both development servers in one terminal:
 
 ```bash
+./scripts/start_app.sh
+```
+
+The launcher applies pending migrations and stops both processes together. The equivalent manual
+commands, when separate terminals are preferred, are:
+
+```bash
+uv run --project backend alembic -c backend/alembic.ini upgrade head
 uv run --project backend uvicorn mf_strategy_tester.api.main:app --reload
 ```
 
@@ -246,7 +297,22 @@ uv run --project backend uvicorn mf_strategy_tester.api.main:app --reload
 npm --prefix web run dev
 ```
 
-Open `http://127.0.0.1:5173/?view=data`.
+Open `http://127.0.0.1:5173/`.
+
+## Daily instrument synchronization
+
+`scripts/sync_all_daily.sh` is the scheduler entrypoint for all currently supported instrument
+series. It sequentially refreshes AMFI catalog/NAV, configured official Nifty price/GTR/NTR series,
+and NSE/BSE ETF prices under `data/amfi-sync.lock`. The default correction window is seven calendar
+days ending on today's `Asia/Kolkata` date. Every run retains per-lane JSON, an aggregate log, and a
+final status file under `data/daily-sync-reports/`. Distribution and lifecycle acquisition remain
+separate, lower-frequency workflows.
+
+The wrapper passed Bash syntax validation and two isolated orchestration tests covering the exact
+bounded arguments, aggregate status output, and continuation of independent benchmark lanes after
+an AMFI failure. The complete backend unit suite now passes 235 tests; Ruff, strict mypy, frontend
+tests/build, and `git diff --check` also pass. The real network workflow was not launched by the
+agent because it is a long-running acquisition intended for a separate operator console.
 
 ## Latest acceptance artifacts
 
@@ -271,7 +337,7 @@ Open `http://127.0.0.1:5173/?view=data`.
 The targeted KFintech scheme-filter change passed 16 focused capture/parser tests, Ruff, and shell
 syntax validation. At that checkpoint migration `20260831_0027` was applied, the targeted job
 exited zero, and the normalization and coverage runs completed. That migration statement is
-historical; the current applied head is `20260902_0028` as reported above.
+historical; the current applied head is `20260904_0032` as reported above.
 
 The subsequent blocked-IDCW audit added the read-only `distribution-blocker-report` command. Its
 live result reconciled all 67 options and 937 rows to the latest coverage snapshot. The identity
@@ -294,9 +360,72 @@ requested cutoff, and maintained statistics report 1 September as the newest val
 live database values in this file were rechecked after that run rather than copied from the older
 handoff narrative.
 
+The screener pivot removed the empty strategy catalog, API, domain/repository/service code, UI,
+and tests. Migration `0029` passed fresh upgrade, downgrade reconstruction, and non-empty-catalog
+refusal checks before it was applied locally. The additive classification-reference migration
+`0030` passed fresh upgrade, downgrade, re-upgrade, and schema-drift checks. Before the local-alias
+change, the suite passed 226 backend tests, Ruff, strict mypy, six frontend tests, TypeScript
+compilation, and the production frontend build.
+
+Migration `0031` subsequently passed an empty-database upgrade, downgrade to `0030`, and re-upgrade,
+and it was applied to the retained local database. Direct database checks after application found
+103 canonical classifications, 222 retained AMFI source labels, 25 screener aliases, 57 mapped
+canonical classifications, and 25 immutable alias revisions. The Direct Growth one-year selector
+returned 54 unique concise choices; Corporate Bond resolved across both retained AMFI families
+with 26 candidates, 21 eligible options, and five explicit exclusions. A live service smoke check
+returned the selected alias and its mapping version in the screener response. The backend unit
+suite passed 222 tests. The data-API integration file passed five tests before the newest alias-
+management API test was added. That was the pre-review verification checkpoint superseded by the
+4 September results below.
+
+The 4 September production-diff review added the explicit alias deactivation/release rule, rejected
+blank normalized audit reasons, rendered the mapping version, and corrected the screener candidate
+query to use latest observed metadata while retaining pre-inception options as explicit stale
+exclusions. It also aligned the ORM alias-member index name with migration `0031`; `alembic check`
+now reports no model drift. A fresh temporary database passed `0030 -> 0031 -> 0030 -> 0031` and
+ended at head.
+
+A read-only live smoke check of the corrected Corporate Bond one-year Direct Growth query retained
+the expected 26 candidates, 21 eligible options, and five exclusions with mapping version
+`screener-open-debt-corporate-bond:v1`; it completed in 3.888 seconds on the retained 33.7-million-
+row NAV dataset.
+
+All 227 backend unit tests and all four source-ingestion integration tests pass. Ruff formatting and
+lint, strict mypy over 52 source files, `git diff --check`, all six frontend tests, TypeScript
+compilation, and the production Vite build pass. The six data-API integration tests collect, but
+cannot execute in the current managed sandbox: even a minimal synchronous FastAPI endpoint hangs in
+AnyIO's worker-thread bridge, while an async endpoint succeeds. A bounded stack dump localizes the
+block before application startup/query execution. This reproduces the older documented
+Python 3.13.13 / AnyIO 4.14.2 `TestClient` environment limitation and is not evidence of an
+application assertion failure. Those six tests, including the new HTTP deactivation/reassignment,
+blank-reason, and pre-inception exclusion assertions, remain the final verification gate.
+
+The 4 September ETF/index/benchmark screener extension subsequently passed 233 backend unit tests,
+Ruff formatting/lint, strict mypy over 53 source files, seven frontend tests, TypeScript compilation,
+the production Vite build, and `git diff --check`. A retained-database smoke check exposed 321
+eligible Direct Growth index-fund options, 16 eligible Direct Growth ETF options, and 14 official
+Nifty reference series for the one-year selector. The Nifty 50 TRI check correctly returned
+`stale_endpoint` (24 August observation versus 2 September NAV as-of, nine calendar days) under the
+seven-day tolerance instead of displaying an unmatched benchmark return.
+
+Migration `0032` then backfilled only active canonical classifications without an existing local
+mapping. Its populated migration fixture preserved an existing user alias, created deterministic
+singleton aliases, disambiguated equal short labels with canonical family context, passed
+upgrade/downgrade/re-upgrade, and reported no Alembic model drift. After local application the
+database has 103 active canonical classifications, 103 alias memberships, 71 aliases, 71 immutable
+revisions, and zero active classifications without an alias. The existing user-created Silver ETF
+alias was preserved. The live alias-management response contains Balanced Hybrid Fund as singleton
+alias `screener-singleton-56ebb05f69214d428b000da7fbf3adb2`; all 54 current Direct Growth one-year
+dropdown choices resolve to IDs present in the alias-management response.
+
 ## Suggested first message in a new conversation
 
-> Read `AGENTS.md` and `docs/CURRENT_STATUS.md` completely. Preserve all ignored local research data.
+> Read `CLAUDE.md` and `docs/CURRENT_STATUS.md` completely. Preserve all ignored local research data.
 > Accepted-source data acquisition is complete with documented limitations; do not rerun broad
-> acquisition jobs. Lifecycle null-launch recovery and checkpoint alignment are complete. Continue
-> with explicit official predecessor/merger evidence or the immutable dataset snapshot.
+> acquisition jobs. The product is now a customized mutual-fund performance screener. Migration
+> `20260904_0032` and the local classification-alias management feature are implemented and applied
+> to the retained database without changing AMFI source text. The production-diff review and all
+> runnable checks are complete; rerun the six data-API integration tests in an environment that
+> permits AnyIO worker threads. Then continue with the richer risk/consistency metrics in
+> `docs/IMPLEMENTATION_PLAN.md`.
+> The superseded strategy subsystem and empty local tables have already been removed.

@@ -1,177 +1,217 @@
-# Phase-wise implementation plan
+# Mutual-fund screener implementation plan
 
 ## Product outcome
 
-After source data is ingested, a user can build and version a strategy in the browser, select or construct portfolios, run it over a historical period, compare it with an explicit benchmark, and inspect every decision, transaction, assumption, warning, and source input. Routine strategy experimentation requires no code change.
+Build a local-first mutual-fund screener that ranks comparable Indian mutual-fund scheme options
+across fund houses using the normalized, provenance-linked NAV dataset. The primary workflow is to
+answer:
 
-## Phase 0 — engineering foundation (bootstrapped)
+> Which funds performed best over a declared period, within the fund houses, classifications, plan,
+> and option types I selected?
 
-**Deliverables**
+The product is a research screener, not a strategy builder, portfolio constructor, recommendation
+engine, or backtester. Every ranking must expose its financial assumptions, exact NAV endpoints,
+data freshness, exclusions, and stable AMFI scheme code.
 
-- Python and TypeScript project structure, local configuration, linting, typing, and tests.
-- FastAPI service, SQLite repository, migration framework, and health endpoint.
-- Immutable versioned strategy catalog with a validated declarative schema.
-- Initial visual builder for category, signal, selection count, allocation, schedule, dates, capital, execution lag, and benchmark.
-- Architecture decisions and explicit financial invariants.
+## Ranking correctness boundaries
 
-**Exit criteria**
+- The comparison unit is an AMFI scheme option identified by AMFI scheme code. Scheme names are
+  descriptive attributes and must not be used as durable identifiers.
+- The first ranking release is limited to Growth options. NAV-only returns are economically
+  incomplete for IDCW options because distributions are excluded; IDCW must not be mixed into a
+  Growth ranking.
+- Direct and Regular plans are separate options. The default universe is Direct Growth, and any
+  Regular-plan view must be explicitly selected and labeled.
+- “Best performing” means trailing NAV return over the selected horizon—not a recommendation and
+  not a prediction of future performance.
+- The default screen is all fund houses, Direct Growth, one-year trailing return, as of the latest
+  valid dataset NAV date. Every default remains visible and user-adjustable.
+- Horizons shorter than one year use absolute return. Horizons of one year or longer use CAGR with
+  actual elapsed days and an `actual/365` convention. Both raw total return and annualized return
+  remain available in the response.
+- The requested `as_of` date defaults to the latest valid dataset NAV date. Each ranked option uses
+  its latest valid NAV on or before that date and is excluded if the endpoint exceeds the declared
+  staleness tolerance.
+- The start endpoint is the first valid NAV on or after the calendar target date within a declared
+  tolerance. Actual start/end dates and elapsed days are returned for every row.
+- Missing NAVs are never zero-filled or silently forward-filled. Quarantined NAV revisions are
+  excluded.
+- Initial rankings use the latest observed scheme metadata and therefore are not survivorship-free
+  historical-universe studies. The UI must display this limitation.
 
-- A strategy can be created and revised through the API; revisions cannot mutate history.
-- Backend tests, migration upgrade, lint/type checks, and frontend tests/build pass.
+## Existing data foundation to retain
 
-## Phase 1 — source capture and data provenance (implemented)
+The following capabilities are complete foundations for the screener and remain in scope:
 
-**Deliverables**
+- immutable AMFI raw artifacts and audited ingestion batches;
+- complete/resumable historical and incremental NAV acquisition;
+- AMFI-code-based scheme-option identity and versioned metadata;
+- immutable NAV revisions, provenance links, coverage intervals, and data-quality quarantine;
+- current scheme browser, single-option NAV performance, drawdown, IDCW evidence, and source drill-
+  down;
+- accepted-source IDCW, lifecycle, and benchmark datasets with their documented limitations; and
+- local FastAPI, SQLite, React, TypeScript, migration, test, and observability foundations.
 
-- AMFI adapters for scheme master data, `NAVAll.txt`, historical NAV, and IDCW/distribution history.
-- Content-addressed immutable raw artifact store.
-- Ingestion batches recording source URL/identifier, checksum, retrieval time, parser version, counts, and failures.
-- Strict parsers with representative fixtures and structural-change failures; distribution source
-  surveys may explicitly quarantine individual bad rows, but never structural envelope failures.
-- CLI commands for independent full/incremental ingestion; no ingestion coupled to page requests.
+Current dataset counts and acquisition acceptance artifacts remain authoritative in
+`docs/CURRENT_STATUS.md`.
 
-**Exit criteria**
-
-- Re-downloading identical content is idempotent.
-- Malformed source structure fails loudly without partially publishing normalized data.
-- Every accepted normalized value is traceable to a raw artifact and batch.
-
-Source capture and provenance are complete. Phase 2 publication retains a source mapping for every
-normalized NAV observation, including repeated and revised AMFI publications.
-
-## Phase 2 — canonical research model and data quality
-
-**Current status:** AMFI fund discovery, complete/resumable historical NAV ingestion, immutable NAV
-revisions, option-level metadata versions, source lineage, zero-NAV quarantine, interval coverage,
-incremental overlap, scheduler entrypoint, live UI coverage, resumable distribution source
-snapshots, auditable opt-in distribution row quarantine, conservative distribution candidate
-gating, and provenance-linked revisioned `DistributionEvent` publication are implemented without
-publishing portfolio cash flows. The research UI exposes NAV-only since-inception/rolling returns,
-drawdown, canonical distribution provenance, and append-only option-level distribution evidence
-coverage per scheme option. The first coverage snapshot proves that the AMFI distribution endpoint
-is materially incomplete. A first HDFC official-notice adapter now captures the declaration and a
-separate scheme-summary identity artifact, publishes exact-code multi-source provenance, and blocks
-amount conflicts. Broader historical HDFC and multi-AMC documentary coverage is optional under the
-accepted local-research source policy; AMFI, CAMS/KFintech, and AdvisorKhoj are the acquisition
-completion sources. Their acquisition runs are complete with retained source limitations, and the
-latest coverage snapshot contains 875,315 canonical events across 3,932 event-present options. The
-AMFI family/detail/launch lifecycle batch has run for all 57 fund catalogs: 10,945 of 10,981
-families have detail-backed launch events. The 36 prior detail gaps were audited as valid official
-rows with explicit null launch dates; the parser and model retain them as unknown-date details, and
-the targeted local recovery completed without inventing launch events. Official Nifty price/TRI/NTR
-and NSE/BSE ETF batches have also run; their acceptance report retains provisional BSE identity,
-partial-roster, empty-period, and invalid-row issues rather than repairing them heuristically. The
-21 option-level identifiers covering 208 source rows that are absent from NAV history now have
-append-only `source_only` reviews referencing their AMFI artifacts, but none has evidence for a NAV
-mapping. In addition, 440 non-positive scalar source-row versions across 109 identifiers must
-remain outside canonical cash flows, and non-zero values change unit convention on 06-Apr-2009.
-
-The distribution data-acquisition implementation has an operational precedence rule. The complete
-current AdvisorKhoj catalog (4,442 histories / 1,066,137 rows) is stored immutably with 2,243
-evidence-backed AMFI mappings and an explicit ambiguous/unresolved backlog. AdvisorKhoj can publish
-only as the tertiary fallback after AMFI and CAMS/KFintech evidence is evaluated. The required
-operator batches and acceptance reports are complete as of 2 September 2026; remaining RTA/Advisor
-identities, source conflicts, and unverified-empty options are explicit data-quality work rather
-than a reason to infer events or rerun unchanged full acquisitions. Current counts and exact
-reports are in `docs/CURRENT_STATUS.md`.
-Core accounting should begin with Growth-option NAV and canonical events only, while IDCW cash-flow
-support remains gated on explicit source trust and double-counting tests.
+## Phase 0 — remove the superseded strategy product (implemented)
 
 **Deliverables**
 
-- Explicit AMC, scheme, plan, option, stable identifier, NAV observation, distribution event, and lifecycle models.
-- Identity resolution centered on AMFI scheme codes and ISINs, including rename/merge evidence.
-- Point-in-time metadata/lifecycle history to avoid current-universe survivorship assumptions.
-- Data-quality rules for duplicates, invalid values/dates, stale feeds, gaps, extreme moves, identifier conflicts, and option/distribution inconsistencies.
-- Research APIs and UI screens for scheme search, NAV/distribution inspection, provenance, and quality issues.
+- Remove the strategy builder, saved-strategy library, strategy API routes and schemas, declarative
+  strategy domain model, repository/service code, and their tests.
+- Remove strategy/backtest navigation, product copy, architecture decisions, and roadmap content.
+- Replace product-facing “MF Strategy Tester/Lab” branding with “MF Fund Screener”.
+- Preserve the original Alembic migration chain for reproducibility; add a forward migration that
+  drops the unused strategy tables. The pre-migration local audit found zero `strategies` and zero
+  `strategy_versions` rows, so the applied migration discarded no saved user records.
+- Keep ingestion, normalized research data, existing analytics, and ignored local data intact.
+- Do not rename the internal Python package in this phase; that mechanical change has no screener
+  value and would add migration/script risk. Product-facing names must still be corrected.
 
 **Exit criteria**
 
-- Natural duplicates are blocked by database constraints.
-- Missing observations are classified rather than zero-filled or silently forward-filled.
-- Users can drill from a displayed observation to its source artifact.
+- The application starts directly in the research/screener workspace and makes no strategy API
+  request.
+- `/api/v1/strategies` is no longer registered.
+- Fresh and existing databases migrate to the new head; downgrade recreates the two empty legacy
+  tables without inventing data.
+- Backend tests, Ruff, strict mypy, frontend tests, and frontend build pass.
+- No executable strategy-builder code remains.
 
-## Phase 3 — deterministic portfolio accounting engine
+## Phase 1 — screener ranking domain and API (initial release implemented)
 
 **Deliverables**
 
-- Valuation-calendar and information-availability abstractions.
-- Explicit signal date, decision time, applicable NAV date, debit date, and unit-allocation convention.
-- Decimal-safe order, transaction, lot/unit, cash, contribution, withdrawal, fee, and IDCW ledgers.
-- Growth and IDCW treatment without distribution or expense double counting.
-- Hand-audited golden scenarios for lump sum, SIP, rebalance, missing NAV, holiday, redemption, and distribution flows.
+- A typed, read-only screener service independent of HTTP and UI layers.
+- A paginated endpoint such as `GET /api/v1/data/screener` supporting:
+  - one, multiple, or all active fund houses;
+  - one or more exact AMFI classifications;
+  - Direct or Regular plan selection, defaulting to Direct;
+  - Growth option selection for the first release;
+  - horizons of 1 month, 3 months, 6 months, 1 year (default), 3 years, 5 years, and 10 years;
+  - explicit `as_of`, endpoint tolerance, and minimum-history inputs;
+  - scheme-name, AMFI-code, or ISIN search; and
+  - deterministic sorting by performance, fund house, scheme name, or AMFI code.
+- A response row containing AMFI code, scheme name, fund house, classification, plan/option,
+  start/end NAV and dates, elapsed days, total return, CAGR where applicable, endpoint staleness,
+  and current data-quality status.
+- Response-level metadata containing the requested filters, actual dataset date, return basis,
+  distribution treatment, day-count convention, endpoint rules, total eligible rows, and exclusion
+  counts by reason.
+- Set-based database access suitable for the full local universe. Do not load the complete NAV
+  history separately for every option.
 
 **Exit criteria**
 
-- Golden fixtures independently reconcile units, cash, transactions, and terminal value.
-- The engine performs no network access and is deterministic for strategy revision plus dataset snapshot.
-- Look-ahead checks reject information unavailable at a decision timestamp.
+- Hand-calculated fixtures independently verify absolute return, CAGR, anniversary selection,
+  holiday tolerance, stale endpoints, insufficient history, and deterministic ties.
+- Direct and Regular options never collapse into one row, and IDCW cannot enter the initial Growth
+  ranking accidentally.
+- Pagination and sorting are stable for equal returns.
+- Query performance is measured against the local dataset before adding caches or summary tables.
+- API integration tests cover valid filters, empty results, invalid dates/horizons, and stale or
+  insufficient data.
 
-## Phase 4 — no-code strategy composition
+## Phase 2 — customized screener interface (initial release implemented)
 
 **Deliverables**
 
-- UI steps for universe, eligibility, signals, ranking/filtering, allocation, risk constraints, rebalance, execution, cash flows, costs, and benchmark.
-- Registry of typed engine primitives with machine-readable parameter metadata, enabling UI controls to be rendered from capabilities.
-- Composable boolean/arithmetic expression graph for filters and scores; no arbitrary Python or JavaScript execution.
-- Templates for lump sum, SIP, fixed portfolio, top-N momentum, risk-weighted, and multi-signal strategies.
-- Validation preview showing eligible historical coverage and contradictions before a run.
+- Make the screener the application home view.
+- Multi-select fund-house filters with “all fund houses” as the default.
+- Exact classification, plan, horizon, as-of date, search, and minimum-history controls.
+- A sortable, paginated result grid showing rank, fund, fund house, AMFI code, classification,
+  actual period, return, CAGR/absolute-return label, latest NAV date, and quality/freshness status.
+- Clear loading, empty, invalid-filter, partial-data, and API-error states.
+- URL-backed filter state so a screen can be bookmarked or shared locally without a saved-strategy
+  subsystem.
+- Row drill-down that reuses the existing NAV performance, drawdown, IDCW evidence, and provenance
+  views.
+- Visible methodology and limitations beside the ranking rather than hidden in documentation.
 
 **Exit criteria**
 
-- All shipped primitives and their combinations are configurable without code changes.
-- Documents are schema-versioned, migratable, diffable, and reproducible.
-- Unsafe, circular, incompatible, or point-in-time-invalid graphs are rejected before execution.
+- A user can compare Direct Growth funds across all 57 current fund houses without selecting one
+  fund house first.
+- Every displayed return can be traced to its exact AMFI code and start/end NAV observations.
+- Filter changes cannot show stale results from an earlier request.
+- Frontend schema validation rejects malformed API responses.
+- Component tests cover filters, sorting, pagination, exclusions, empty state, and drill-down.
 
-## Phase 5 — backtest orchestration and reproducible runs
+The initial release implements the default landing screen, stable canonical classification IDs,
+an audited source-alias reference and non-mutating similarity report, and a separate audited local
+alias layer for concise screener labels and reviewed predecessor/successor grouping. The local
+mapping is editable under the top-level **Aliases** navigation item without rewriting AMFI source
+text. Every active canonical classification has an explicit alias; classifications outside a
+reviewed group use audited singleton aliases. Audited deactivation releases all members for
+explicit reassignment. The release also includes all/single fund-house filtering, Direct/Regular
+separation, seven performance horizons, search, stable return ranking, exclusions, pagination, and
+comparison of up to five funds. The existing data workspace is available under the top-level
+**Data** navigation item. NAV comparison supports normalized-to-100 and raw-NAV views; canonical
+IDCW cash events are annotated at record date without being added to NAV returns. The visible
+methodology note includes the classification mapping version. URL-backed screener filters, sortable
+columns, frontend interaction tests, and the environment-blocked data-API integration rerun remain
+before this phase is considered fully closed.
+
+The selector also exposes explicit mutual-fund, index-fund, and ETF product facets. Index funds and
+ETFs remain AMFI option-level NAV rankings. Official Nifty price, GTR, and NTR series can be selected
+as separately labelled standalone references with independently reported actual endpoints and
+staleness; they do not alter rank or claim excess return across unmatched dates.
+
+## Phase 3 — richer screening metrics
+
+Add metrics only after the primary trailing-return ranking is correct and measured.
+
+**Candidate deliverables**
+
+- maximum drawdown over the selected period;
+- annualized volatility with an explicit observation frequency and annualization convention;
+- rolling-return consistency, including median, minimum, and positive-period percentage;
+- return-versus-drawdown and return-versus-volatility sorting;
+- multiple-horizon columns for side-by-side consistency checks; and
+- benchmark-relative return only where a suitable, explicitly selected total-return index and an
+  exact common-date alignment rule exist; standalone benchmark return is already available.
+
+**Exit criteria**
+
+- Every metric has an independently calculable fixture and a displayed definition.
+- Metrics with invalid prerequisites are omitted or explicitly unavailable, never coerced to zero.
+- Benchmark price, gross total-return, and net total-return series are never treated as
+  interchangeable.
+
+## Phase 4 — reproducibility and operational hardening
 
 **Deliverables**
 
-- Persisted run configuration referencing strategy revision, dataset snapshot, application version, date range, timing, costs, and benchmark.
-- Local job runner with progress, cancellation boundaries, structured logs, and actionable failures.
-- Persisted transaction ledger, daily portfolio state, allocation history, warnings, and run manifest.
-- Run comparison and exact rerun capability.
+- Immutable dataset-snapshot manifest tying NAV, scheme metadata, lifecycle, parser, code, and
+  quality versions to an exported screener result.
+- CSV export containing visible columns, exact filter configuration, methodology metadata, and
+  snapshot identifier.
+- Query-plan and latency measurements for common full-universe filters.
+- Index or precomputed-summary changes only when measurements justify them and invalidation rules
+  are explicit.
+- Database backup/restore and migration tests from both an empty database and the previous head.
+- High-value browser tests for ranking, drill-down, bookmark restoration, error handling, and
+  export.
 
 **Exit criteria**
 
-- The same versioned inputs produce identical outputs within documented numeric tolerances.
-- Partial/failed runs are never presented as completed results.
-- A completed result can be audited from metric to portfolio state to normalized row to raw artifact.
-
-## Phase 6 — metrics, benchmarks, and research visualization
-
-**Deliverables**
-
-- Independently tested total return, CAGR, XIRR, volatility, drawdown/depth/duration, rolling returns, and benchmark-relative metrics.
-- Explicit frequency, annualization factor, day count, risk-free rate, date alignment, and total-return/price-return labels.
-- Equity/drawdown charts, benchmark comparison, rolling windows, allocation view, transaction ledger, cash-flow view, and metric definitions.
-- Export of configuration, run manifest, ledgers, time series, warnings, and metrics.
-
-**Exit criteria**
-
-- Metrics are hidden or marked invalid when prerequisites are not met.
-- Every formula has an independently calculable test fixture.
-- Charts and tables expose units, dates, assumptions, loading/empty/error states, and provenance links.
-
-## Phase 7 — hardening and operational readiness
-
-**Deliverables**
-
-- Incremental-ingestion recovery, source revision workflow, database backup/restore, migration tests, and dataset rebuild tooling.
-- Performance measurements for historical ingestion, time-series queries, rolling calculations, and repeated runs.
-- Dependency/security review, localhost-only defaults, input/file limits, and structured observability.
-- High-value browser tests for ingest status, strategy creation, run execution, audit drill-down, and export.
-
-**Exit criteria**
-
-- Backup and restore are exercised, migrations run from an empty database and the previous release, and recovery procedures are documented.
-- Target datasets and research views meet measured local performance budgets.
-- No known high-severity correctness, provenance, security, or reproducibility defect remains.
+- The same filters and dataset snapshot reproduce the same ordered results.
+- Exported rankings disclose actual NAV dates and all calculation conventions.
+- No known high-severity correctness, provenance, security, or data-integrity defect remains.
 
 ## Main risks
 
-1. **Historical identity and survivorship:** AMFI history may not fully express lifecycle events. Preserve evidence, show coverage limitations, and never imply survivorship-free results without proof.
-2. **Information availability:** NAV dates do not alone prove when values became knowable. Timing conventions must remain explicit and configurable.
-3. **Source format drift:** strict parsing and raw retention are mandatory; permissive parsing could silently corrupt research.
-4. **No-code scope creep:** arbitrary user formulas can undermine point-in-time safety. Use a typed capability registry and validated expression graph, not code evaluation.
-5. **Metric credibility:** visually plausible results can still be wrong. Golden portfolio ledgers and independent formula fixtures gate result presentation.
+1. **False comparability:** mixing IDCW with Growth, Direct with Regular, or unrelated categories
+   can produce a numerically correct but economically misleading ranking.
+2. **Endpoint bias:** stale or mismatched start/end NAV dates can change rank order. Actual dates,
+   elapsed days, and exclusions must remain visible.
+3. **Current-universe bias:** current metadata and catalogs do not establish a survivorship-free
+   historical universe. The first screener is a current-universe research view.
+4. **Category inconsistency:** source classifications and historical renames may not be comparable
+   across time. Use exact retained classifications until an auditable normalization exists.
+5. **Outliers and source revisions:** extreme returns may reflect genuine events, scheme changes,
+   or source anomalies. Preserve drill-down and quality evidence instead of silently winsorizing.
+6. **Scale:** ranking tens of thousands of options over tens of millions of NAV rows can encourage
+   premature caching. Measure the set-based query first and define invalidation before caching.
