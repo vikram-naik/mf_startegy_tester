@@ -61,6 +61,53 @@ current AMFI NAV observation agree. RTA codes remain separately queryable. Ambig
 options and amount conflicts are retained but blocked. An operator can append a manual mapping only
 with documented evidence; mappings are never overwritten.
 
+### NAV-fingerprint identity fallback
+
+The exact name/plan/NAV rule finds candidates only through an exact normalized-name match, so a
+naming difference alone leaves a capture unresolved before its NAV evidence is examined. When that
+rule yields no candidate, mapping falls back to the RTA's own published NAVs (KFintech ex/cum NAV
+per record date, plus the page's latest NAV). Only the AMFI identity is inferred; the published
+amount is always the RTA's declared Individual/Retail value, and nothing is derived from NAV
+movements.
+
+The fallback (`rta-nav-fingerprint-2026.09.1`, mapping method `nav_fingerprint`) maps a capture
+only when exactly one current AMFI option qualifies:
+
+1. its NAV-attached metadata is IDCW and its plan equals an explicit RTA Direct/Regular plan;
+2. it is found through up to four recent probe dates whose evidence values are pairwise distinct,
+   matching at least two of them when two or more exist;
+3. at least three evidence dates match exactly (Decimal equality), spanning at least 30 days, with
+   at least two distinct matched values, so a constant-NAV option (for example 10.0000) cannot
+   qualify; and
+4. on every date where it has a current valid AMFI NAV, that NAV equals one of the RTA values for
+   that date (ex or cum); any mismatch blocks the candidate.
+
+Several qualifying options remain `ambiguous`, as do identical-NAV twins. Evidence JSON retains
+probe dates, every candidate's match/conflict counts with recent samples, and a reason code:
+`unique_nav_fingerprint`, `multiple_nav_fingerprint_candidates`, `nav_fingerprint_conflict`,
+`insufficient_nav_fingerprint_matches`, `no_nav_fingerprint_candidate`, or
+`insufficient_nav_fingerprint_evidence`. `distribution-identity-backlog-report` groups the
+remaining backlog by these reasons.
+
+CAMS captures carry only one latest NAV and no per-row NAV, so they cannot meet this rule; the
+fallback mainly affects KFintech. Name-path conclusions and manual mappings are unchanged.
+
+Re-evaluate already imported captures offline (no RTA request) and publish newly mapped rows:
+
+```bash
+./scripts/remap_rta_nav_fingerprint.sh
+./scripts/remap_rta_nav_fingerprint.sh data/rta-captures/kfintech-full.jsonl \
+  data/rta-captures/cams-full.jsonl
+```
+
+The script runs migrations, writes before/after payout-gap and backlog reports, runs
+`resume-rta-distribution-import` per file, refreshes coverage, and writes
+`data/rta-reports/nav-fingerprint-remap-<timestamp>.log` and `.status`. It is idempotent: reviews
+are deduplicated by signature and already linked rows are skipped. Migration `20260928_0034`
+rebuilds `rta_scheme_mapping_reviews` to allow `nav_fingerprint`; back up the database first, for
+example `sqlite3 data/research.db ".backup data/research-pre-0034.db"`. Its downgrade refuses to
+run once any `nav_fingerprint` review exists.
+
 Scheme-core normalization removes only source presentation decorations that do not identify an
 economic option, including CAMS reinvestment/exchange suffixes and obsolete-name clauses beginning
 with `Formerly` or `erstwhile`. Distribution-frequency terms remain part of the identity because

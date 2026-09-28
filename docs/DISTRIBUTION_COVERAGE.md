@@ -30,6 +30,22 @@ for precedence or amount conflicts; the report never publishes it automatically.
 
 `scripts/sync_amfi_distributions.sh` and `scripts/sync_rta_distributions.sh` run the assessment
 automatically after normalization/import.
+
+For a bounded research window, a read-only payout-gap report restricts the universe to options
+that are still live and summarizes declared evidence per fund house:
+
+```bash
+backend/.venv/bin/mfst distribution-payout-gap-report --since 2025-01-01 --missing-limit 200
+```
+
+An option is live when its last observed AMFI NAV date is on or after `--since` and the metadata
+attached to that NAV classifies it as IDCW. For each fund house it reports live and
+payout-eligible options (payout ISIN present, matching the IDCW screener), options with and
+without current canonical events dated on or after the cutoff, and event/option counts by source
+(`amfi`, `official_notice`, `cams`, `kfintech`, `advisorkhoj`). Source counts overlap when several
+sources confirm one event. Fund houses are ordered by options without events, so the list
+prioritizes where extra official acquisition is worth building. It writes nothing, and an option
+without events is absence of evidence, not a verified zero payout.
 Assessments are append-only snapshots. Each row references the exact scheme metadata version used
 for option classification and retains source-row, canonical-source-link, canonical-event, blocked
 row, and source record-date counts.

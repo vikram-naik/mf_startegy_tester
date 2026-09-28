@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import Float, and_, cast, func, or_, select, true
 from sqlalchemy.orm import Session
 
 from mf_strategy_tester.db.models import (
@@ -48,6 +48,14 @@ logger = logging.getLogger(__name__)
 RTA_NORMALIZATION_VERSION = "rta-distribution-2026.08.6"
 _EVENT_TYPE = "idcw_cash"
 _EARLIEST_PLAUSIBLE_RECORD_DATE = date(1964, 1, 1)
+_FINGERPRINT_POLICY_VERSION = "rta-nav-fingerprint-2026.09.1"
+_FINGERPRINT_MIN_MATCHES = 3
+_FINGERPRINT_MIN_SPAN_DAYS = 30
+_FINGERPRINT_MIN_DISTINCT_VALUES = 2
+_FINGERPRINT_MAX_PROBES = 4
+_FINGERPRINT_MIN_PROBE_MATCHES = 2
+_FINGERPRINT_PREFILTER_TOLERANCE = 1e-6
+_FINGERPRINT_EVIDENCE_SAMPLE = 20
 _BASE_URLS = {
     "cams": "https://www.camsonline.com/InvestorServices/COL_ISNAV.aspx",
     "kfintech": "https://mfs.kfintech.com/mfs/InvestorServices/NAVDividend/NAV_Dividend.aspx",
@@ -126,6 +134,55 @@ class _MappingConclusion:
     mapping_method: str
     evidence_details: str
     review_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _FingerprintCandidate:
+    amfi_scheme_code: str
+    scheme_name: str
+    plan_type: str
+    matches: tuple[date, ...]
+    matched_values: int
+    conflicts: tuple[tuple[date, Decimal], ...]
+    source_values: dict[date, frozenset[Decimal]]
+
+    @property
+    def span_days(self) -> int:
+        return (self.matches[-1] - self.matches[0]).days if self.matches else 0
+
+    @property
+    def qualifying(self) -> bool:
+        return (
+            not self.conflicts
+            and len(self.matches) >= _FINGERPRINT_MIN_MATCHES
+            and self.span_days >= _FINGERPRINT_MIN_SPAN_DAYS
+            and self.matched_values >= _FINGERPRINT_MIN_DISTINCT_VALUES
+        )
+
+    def as_evidence(self) -> dict[str, object]:
+        return {
+            "amfi_scheme_code": self.amfi_scheme_code,
+            "scheme_name": self.scheme_name,
+            "plan_type": self.plan_type,
+            "match_count": len(self.matches),
+            "first_match": self.matches[0].isoformat() if self.matches else None,
+            "last_match": self.matches[-1].isoformat() if self.matches else None,
+            "recent_matches": [
+                item.isoformat() for item in self.matches[-_FINGERPRINT_EVIDENCE_SAMPLE:]
+            ],
+            "evidence_span_days": self.span_days,
+            "distinct_matched_values": self.matched_values,
+            "conflict_count": len(self.conflicts),
+            "recent_conflicts": [
+                {
+                    "date": nav_date.isoformat(),
+                    "amfi": str(value),
+                    "source": sorted(str(item) for item in self.source_values[nav_date]),
+                }
+                for nav_date, value in self.conflicts[-_FINGERPRINT_EVIDENCE_SAMPLE:]
+            ],
+            "qualifying": self.qualifying,
+        }
 
 
 @dataclass(frozen=True)
@@ -510,39 +567,30 @@ class RtaDistributionImportService:
                 item["evidence_type"],
             )
         )
-        details = json.dumps(
-            {
-                "policy": "exact normalized scheme core + plan + exact current NAV evidence",
-                "source_scheme_core": source_core,
-                "source_plan_type": source.plan_type,
-                "evidence_points": len(evidence),
-                "metadata_candidate_codes": sorted(metadata_candidate_codes),
-                "matches": matched_evidence,
-                "candidate_codes": sorted(candidate_codes),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        if len(candidate_codes) == 1:
+        name_evidence: dict[str, object] = {
+            "policy": "exact normalized scheme core + plan + exact current NAV evidence",
+            "source_scheme_core": source_core,
+            "source_plan_type": source.plan_type,
+            "evidence_points": len(evidence),
+            "metadata_candidate_codes": sorted(metadata_candidate_codes),
+            "matches": matched_evidence,
+            "candidate_codes": sorted(candidate_codes),
+        }
+        if not candidate_codes:
+            conclusion = self._nav_fingerprint_conclusion(source, name_evidence)
+        elif len(candidate_codes) == 1:
             conclusion = _MappingConclusion(
                 status="mapped",
                 amfi_scheme_code=next(iter(candidate_codes)),
                 mapping_method="exact_name_plan_nav",
-                evidence_details=details,
+                evidence_details=_evidence_json(name_evidence),
             )
-        elif candidate_codes:
+        else:
             conclusion = _MappingConclusion(
                 status="ambiguous",
                 amfi_scheme_code=None,
                 mapping_method="none",
-                evidence_details=details,
-            )
-        else:
-            conclusion = _MappingConclusion(
-                status="unresolved",
-                amfi_scheme_code=None,
-                mapping_method="none",
-                evidence_details=details,
+                evidence_details=_evidence_json(name_evidence),
             )
         review = self._persist_mapping_review(capture, conclusion)
         self._session.commit()
@@ -576,6 +624,190 @@ class RtaDistributionImportService:
         if source.plan_type == "unknown":
             return self._idcw_codes_by_core.get(source_core, frozenset())
         return self._idcw_codes_by_core_plan.get((source_core, source.plan_type), frozenset())
+
+    def _nav_fingerprint_conclusion(
+        self, source: RtaSchemeCapture, name_evidence: dict[str, object]
+    ) -> _MappingConclusion:
+        """Identify an option from the RTA's own published NAVs when no name candidate exists.
+
+        Only identity is inferred here; the published amount remains the RTA's declared value.
+        """
+        evidence = _fingerprint_evidence(source)
+        distinct_values = {value for values in evidence.values() for value in values}
+        probes = _fingerprint_probes(evidence)
+        candidates: tuple[_FingerprintCandidate, ...] = ()
+        probe_codes: tuple[str, ...] = ()
+        if (
+            len(evidence) < _FINGERPRINT_MIN_MATCHES
+            or len(distinct_values) < _FINGERPRINT_MIN_DISTINCT_VALUES
+        ):
+            reason = "insufficient_nav_fingerprint_evidence"
+        else:
+            probe_codes = self._fingerprint_probe_codes(source, probes)
+            candidates = self._assess_fingerprint_candidates(probe_codes, evidence)
+            qualifying_count = sum(candidate.qualifying for candidate in candidates)
+            if not probe_codes:
+                reason = "no_nav_fingerprint_candidate"
+            elif qualifying_count == 1:
+                reason = "unique_nav_fingerprint"
+            elif qualifying_count > 1:
+                reason = "multiple_nav_fingerprint_candidates"
+            elif any(candidate.conflicts for candidate in candidates):
+                reason = "nav_fingerprint_conflict"
+            else:
+                reason = "insufficient_nav_fingerprint_matches"
+        qualifying_codes = sorted(
+            candidate.amfi_scheme_code for candidate in candidates if candidate.qualifying
+        )
+        details = _evidence_json(
+            {
+                **name_evidence,
+                "policy": (
+                    "exact normalized scheme core + plan + exact current NAV evidence; "
+                    "without a name candidate, a unique plan-compatible AMFI IDCW option "
+                    "matching the RTA's published NAVs"
+                ),
+                "candidate_codes": qualifying_codes,
+                "nav_fingerprint": {
+                    "policy_version": _FINGERPRINT_POLICY_VERSION,
+                    "rule": (
+                        f"at least {_FINGERPRINT_MIN_MATCHES} exact NAV date matches spanning "
+                        f"{_FINGERPRINT_MIN_SPAN_DAYS} days with at least "
+                        f"{_FINGERPRINT_MIN_DISTINCT_VALUES} distinct matched values; any "
+                        "comparable-date NAV mismatch blocks the candidate; exactly one "
+                        "qualifying option is required"
+                    ),
+                    "reason": reason,
+                    "evidence_dates": len(evidence),
+                    "distinct_evidence_values": len(distinct_values),
+                    "probe_dates": [item.isoformat() for item, _ in probes],
+                    "probe_candidate_codes": list(probe_codes),
+                    "candidates": [candidate.as_evidence() for candidate in candidates],
+                    "qualifying_codes": qualifying_codes,
+                },
+            }
+        )
+        if len(qualifying_codes) == 1:
+            return _MappingConclusion("mapped", qualifying_codes[0], "nav_fingerprint", details)
+        if qualifying_codes:
+            return _MappingConclusion("ambiguous", None, "none", details)
+        return _MappingConclusion("unresolved", None, "none", details)
+
+    def _fingerprint_probe_codes(
+        self,
+        source: RtaSchemeCapture,
+        probes: tuple[tuple[date, frozenset[Decimal]], ...],
+    ) -> tuple[str, ...]:
+        # The top-level date IN term and `is_current = 1` let SQLite use ix_nav_current_date.
+        # The text-to-REAL cast only narrows that date scan; equality is checked as Decimal.
+        conditions = [
+            and_(
+                NavRevisionRecord.nav_date == nav_date,
+                or_(
+                    *(
+                        cast(NavRevisionRecord.nav_value, Float).between(
+                            float(value) - _FINGERPRINT_PREFILTER_TOLERANCE,
+                            float(value) + _FINGERPRINT_PREFILTER_TOLERANCE,
+                        )
+                        for value in sorted(values)
+                    )
+                ),
+            )
+            for nav_date, values in probes
+        ]
+        statement = (
+            select(
+                NavRevisionRecord.amfi_scheme_code,
+                NavRevisionRecord.nav_date,
+                NavRevisionRecord.nav_value,
+            )
+            .join(
+                SchemeMetadataVersionRecord,
+                SchemeMetadataVersionRecord.id == NavRevisionRecord.metadata_version_id,
+            )
+            .where(
+                NavRevisionRecord.is_current == true(),
+                NavRevisionRecord.nav_date.in_(tuple(nav_date for nav_date, _ in probes)),
+                NavRevisionRecord.quality_status == "valid",
+                SchemeMetadataVersionRecord.option_type == "idcw",
+                or_(*conditions),
+            )
+        )
+        if source.plan_type != "unknown":
+            statement = statement.where(SchemeMetadataVersionRecord.plan_type == source.plan_type)
+        probe_values = dict(probes)
+        matched_dates: dict[str, set[date]] = {}
+        for code, nav_date, nav_value in self._session.execute(statement).tuples():
+            if nav_value in probe_values.get(nav_date, frozenset()):
+                matched_dates.setdefault(code, set()).add(nav_date)
+        required = min(_FINGERPRINT_MIN_PROBE_MATCHES, len(probes))
+        return tuple(
+            sorted(code for code, dates in matched_dates.items() if len(dates) >= required)
+        )
+
+    def _assess_fingerprint_candidates(
+        self,
+        codes: tuple[str, ...],
+        evidence: dict[date, frozenset[Decimal]],
+    ) -> tuple[_FingerprintCandidate, ...]:
+        if not codes:
+            return ()
+        nav_by_code: dict[str, dict[date, Decimal]] = {}
+        metadata_by_code: dict[str, tuple[date, str, str]] = {}
+        for code, nav_date, nav_value, scheme_name, plan_type in self._session.execute(
+            select(
+                NavRevisionRecord.amfi_scheme_code,
+                NavRevisionRecord.nav_date,
+                NavRevisionRecord.nav_value,
+                SchemeMetadataVersionRecord.scheme_name,
+                SchemeMetadataVersionRecord.plan_type,
+            )
+            .join(
+                SchemeMetadataVersionRecord,
+                SchemeMetadataVersionRecord.id == NavRevisionRecord.metadata_version_id,
+            )
+            .where(
+                NavRevisionRecord.amfi_scheme_code.in_(codes),
+                NavRevisionRecord.nav_date.between(min(evidence), max(evidence)),
+                NavRevisionRecord.is_current.is_(True),
+                NavRevisionRecord.quality_status == "valid",
+            )
+        ).tuples():
+            if nav_date in evidence:
+                nav_by_code.setdefault(code, {})[nav_date] = nav_value
+            latest = metadata_by_code.get(code)
+            if latest is None or nav_date > latest[0]:
+                metadata_by_code[code] = (nav_date, scheme_name, plan_type)
+        candidates: list[_FingerprintCandidate] = []
+        for code in codes:
+            observed = nav_by_code.get(code, {})
+            matches = tuple(
+                sorted(
+                    nav_date for nav_date, value in observed.items() if value in evidence[nav_date]
+                )
+            )
+            conflicts = tuple(
+                sorted(
+                    (nav_date, value)
+                    for nav_date, value in observed.items()
+                    if value not in evidence[nav_date]
+                )
+            )
+            if code not in metadata_by_code:
+                raise RuntimeError(f"NAV fingerprint probe code {code} has no verification NAVs")
+            _, scheme_name, plan_type = metadata_by_code[code]
+            candidates.append(
+                _FingerprintCandidate(
+                    amfi_scheme_code=code,
+                    scheme_name=scheme_name,
+                    plan_type=plan_type,
+                    matches=matches,
+                    matched_values=len({observed[nav_date] for nav_date in matches}),
+                    conflicts=conflicts,
+                    source_values={nav_date: evidence[nav_date] for nav_date, _ in conflicts},
+                )
+            )
+        return tuple(candidates)
 
     def _persist_mapping_review(
         self,
@@ -943,6 +1175,39 @@ def _nav_evidence(
         if row.cum_nav is not None:
             evidence.add((row.record_date, row.cum_nav, "cum_nav"))
     return tuple(sorted(evidence, key=lambda item: (item[0], item[2], item[1])))
+
+
+def _fingerprint_evidence(capture: RtaSchemeCapture) -> dict[date, frozenset[Decimal]]:
+    values_by_date: dict[date, set[Decimal]] = {}
+    for nav_date, nav_value, _ in _nav_evidence(capture):
+        if nav_value > 0:
+            values_by_date.setdefault(nav_date, set()).add(nav_value)
+    return {nav_date: frozenset(values) for nav_date, values in values_by_date.items()}
+
+
+def _fingerprint_probes(
+    evidence: dict[date, frozenset[Decimal]],
+) -> tuple[tuple[date, frozenset[Decimal]], ...]:
+    """Pick recent evidence dates whose values are pairwise disjoint.
+
+    A candidate must match at least two probes, so constant-NAV options cannot qualify from
+    one repeated value.
+    """
+    probes: list[tuple[date, frozenset[Decimal]]] = []
+    used_values: set[Decimal] = set()
+    for nav_date in sorted(evidence, reverse=True):
+        values = evidence[nav_date]
+        if values & used_values:
+            continue
+        probes.append((nav_date, values))
+        used_values.update(values)
+        if len(probes) == _FINGERPRINT_MAX_PROBES:
+            break
+    return tuple(probes)
+
+
+def _evidence_json(value: dict[str, object]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _scheme_core(value: str) -> str:

@@ -2,8 +2,8 @@
 
 **Authoritative conversation-reset checkpoint:** 2026-09-04 (`Asia/Kolkata`)
 **Branch:** `main`
-**Repository migration head:** `20260904_0032`
-**Local dataset migration applied:** `20260904_0032`
+**Repository migration head:** `20260928_0034`
+**Local dataset migration applied:** `20260904_0032` (as of the 2026-09-04 checkpoint)
 
 Read `CLAUDE.md` before changing code. This file supersedes older numeric status and next-step
 statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronological audit log.
@@ -141,6 +141,22 @@ The final CAMS breadth report retained 997 prior scheme failures, 54 new scheme 
 page timeouts for ASK, ICICI Prudential, and Unifi while continuing across the remaining roster.
 Their responses/failures remain auditable source limitations. AdvisorKhoj is the accepted broad
 tertiary fallback; another unchanged full CAMS run is not recommended.
+
+### Pending operator step: NAV-fingerprint remap (added 2026-09-28)
+
+The statement above that every unresolved RTA capture has zero candidates describes the
+name-first rule only. Code now falls back to a NAV-fingerprint identity rule when no name candidate
+exists (see `docs/RTA_DISTRIBUTIONS.md`); published amounts remain the RTA's declared values. It
+has not yet been run against the local dataset, so the counts in this file are unchanged. After a
+database backup, run offline:
+
+```bash
+./scripts/remap_rta_nav_fingerprint.sh
+```
+
+Then inspect the before/after `distribution-payout-gap-report` files it writes, which restrict the
+universe to IDCW options live since 2025-01-01, to decide which fund houses still need official
+evidence.
 
 ### AdvisorKhoj tertiary source
 

@@ -42,6 +42,7 @@ from mf_strategy_tester.services.distribution_identity_backlog import (
 from mf_strategy_tester.services.distribution_normalization import (
     DistributionNormalizationService,
 )
+from mf_strategy_tester.services.distribution_payout_gap import DistributionPayoutGapService
 from mf_strategy_tester.services.distribution_sync import DistributionSyncService
 from mf_strategy_tester.services.nav_sync import EARLIEST_AMFI_NAV_DATE, NavSyncService
 from mf_strategy_tester.services.official_distribution_notice import (
@@ -248,6 +249,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=100,
         help="Number of highest-row nonempty captures to include (1-1000; default: 100)",
+    )
+    payout_gap = subcommands.add_parser(
+        "distribution-payout-gap-report",
+        help="Report, per fund house, live IDCW options lacking declared payouts since a date",
+    )
+    payout_gap.add_argument(
+        "--since",
+        type=date.fromisoformat,
+        default=date(2025, 1, 1),
+        help="Inclusive record-date and live-NAV cutoff (ISO date; default: 2025-01-01)",
+    )
+    payout_gap.add_argument(
+        "--missing-limit",
+        type=int,
+        default=200,
+        help="Number of options without events to list (0-5000; default: 200)",
     )
 
     hdfc_notice = subcommands.add_parser(
@@ -480,6 +497,13 @@ def main() -> int:
                 output = asdict(
                     DistributionIdentityBacklogService(session).build_report(
                         ranked_capture_limit=arguments.limit
+                    )
+                )
+            elif arguments.command == "distribution-payout-gap-report":
+                output = asdict(
+                    DistributionPayoutGapService(session).build_report(
+                        since=arguments.since,
+                        missing_option_limit=arguments.missing_limit,
                     )
                 )
             elif arguments.command == "normalize-distributions":
