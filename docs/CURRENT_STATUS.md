@@ -28,6 +28,27 @@ statements in `docs/HANDOFF.md`; the older handoff remains useful as a chronolog
 - The product direction is now a customized cross-fund-house performance screener. Strategy
   construction, portfolio accounting, and backtesting are out of scope.
 
+## Raw artifact store removed (2026-09-28)
+
+To free disk space, the operator deleted the content-addressed raw artifact store (`data/raw`,
+about 100 GB) and all database backups on 2026-09-28. `source_artifacts` rows and every
+provenance link remain in `data/research.db`, but the files they name no longer exist for
+artifacts retrieved before that date. Consequences:
+
+- Normalized observations stay traceable to provider, URL, retrieval time, checksum, parser
+  version, and batch, but the original bytes cannot be re-read or re-parsed offline.
+- Captures that embed their own source payloads and checksums survive outside the store:
+  `data/rta-captures/*.jsonl` (CAMS/KFintech HTML per scheme) and
+  `data/advisorkhoj-captures/*` (catalog and detail responses).
+- Lost evidence that the sources can still serve (AMFI historical NAV, NSE/BSE archives, HDFC
+  PDFs) can be re-acquired and must match the recorded checksum to count as the same artifact.
+  Point-in-time snapshots (daily AMFI current-NAV feeds, earlier AMFI distribution API states)
+  cannot be recovered.
+- Ingestion keeps working: `ArtifactStore.store` re-creates a missing file whenever the same
+  content is downloaded again, and all new artifacts are stored normally.
+- `research.db` is now the only copy of canonical data. Keep at least one compressed backup,
+  preferably on another disk.
+
 ## Completion decision
 
 Accepted-source IDCW acquisition is operationally complete with explicit source limitations. Do
